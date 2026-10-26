@@ -535,7 +535,9 @@ registerProcessor('qtts-ring', QttsRing);
     if (!accessToken) throw new Error("请从 Notebook 打开新的私有入口");
     const epoch = accessEpoch;
     const headers = new Headers(options.headers || {});
-    if (accessToken !== "@private-cookie") headers.set("Authorization", "Bearer " + accessToken);
+    const demo = accessToken === "@demo";
+    if (demo) headers.set("X-QTTS-Demo", "1");
+    else if (accessToken !== "@private-cookie") headers.set("Authorization", "Bearer " + accessToken);
     const signal = options.signal
       ? AbortSignal.any([options.signal, accessController.signal])
       : accessController.signal;
@@ -544,6 +546,7 @@ registerProcessor('qtts-ring', QttsRing);
       headers,
       signal,
       credentials: accessToken === "@private-cookie" ? "same-origin" : "omit",
+      // Demo mode deliberately sends no cookie and no bearer credential.
       redirect: "error",
       referrerPolicy: "no-referrer",
     });
@@ -551,7 +554,7 @@ registerProcessor('qtts-ring', QttsRing);
       await response.body?.cancel();
       throw new DOMException("stale access session", "AbortError");
     }
-    if (response.status === 401) {
+    if (response.status === 401 && !demo) {
       const automatic = accessToken === "@private-cookie";
       lockAccess("会话已结束，正在自动获取新的私密入口…");
       if (automatic) reloadAutomaticEntry();
@@ -627,53 +630,79 @@ registerProcessor('qtts-ring', QttsRing);
     const grant = hash.get("qtts-entry");
     // Drop the one-use capability before the first fetch or API call.
     if (hash.has("qtts-entry")) history.replaceState(null, "", location.pathname + location.search);
-    if (grant && !/^[A-Za-z0-9_-]{43}$/.test(grant)) {
-      r("access-status").textContent = "私有入口格式无效，请从 Notebook 获取新入口";
-      return;
-    }
+    const invalidGrant = Boolean(grant && !/^[A-Za-z0-9_-]{43}$/.test(grant));
     let automaticHint = Boolean(grant);
     try { automaticHint = automaticHint || sessionStorage.getItem("qtts-auto-entry") === "1"; } catch {}
     if (automaticHint) document.body.classList.add("automatic-entry");
-    r("access-status").textContent = "正在自动连接私有控制台…";
+    r("access-status").textContent = "正在连接演示控制台，无需密钥…";
     try {
-      if (grant) {
-        const response = await fetch("/api/session/exchange", {
-          method: "POST", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({grant}), credentials: "same-origin",
-          cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: accessController.signal,
+      let demo = false;
+      let demoProbe = null;
+      try {
+        demoProbe = await fetch("/api/session/status", {
+          headers: {"X-QTTS-Demo": "1"}, credentials: "omit", redirect: "error",
+          cache: "no-store", referrerPolicy: "no-referrer", signal: accessController.signal,
         });
-        if (!response.ok) throw new Error("私密入口交换失败（HTTP " + response.status + "）");
+      } catch { /* an older/private runtime simply has no demo route */ }
+      if (demoProbe?.ok) {
+        demo = true;
+        accessToken = "@demo";
+      } else {
+        if (invalidGrant) {
+          r("access-status").textContent = "私有入口格式无效，请从 Notebook 获取新入口";
+          return;
+        }
+        if (grant) {
+          const response = await fetch("/api/session/exchange", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({grant}), credentials: "same-origin",
+            cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: accessController.signal,
+          });
+          if (!response.ok) throw new Error("私密入口交换失败（HTTP " + response.status + "）");
+        }
+        const response = await fetch("/api/session/status", {
+          credentials: "same-origin", redirect: "error", cache: "no-store",
+          referrerPolicy: "no-referrer", signal: accessController.signal,
+        });
+        if (!response.ok) throw new Error("私密会话检查失败（HTTP " + response.status + "）");
+        accessToken = "@private-cookie";
       }
-      const response = await fetch("/api/session/status", {
-        credentials: "same-origin", redirect: "error", cache: "no-store",
-        referrerPolicy: "no-referrer", signal: accessController.signal,
-      });
-      if (!response.ok) throw new Error("私密会话检查失败（HTTP " + response.status + "）");
       if (epoch !== accessEpoch) return;
-      accessToken = "@private-cookie";
       document.body.classList.add("automatic-entry");
-      try { sessionStorage.setItem("qtts-auto-entry", "1"); } catch {}
-      clearAutomaticRetry();
-      if (!(await O())) throw new Error("网关暂不可用，请稍后从 Notebook 重新打开");
+      if (demo) {
+        document.body.classList.add("demo-open");
+        r("access-panel").hidden = true;
+        r("btn-lock").hidden = true;
+        r("btn-lock-dialog").hidden = true;
+      } else {
+        try { sessionStorage.setItem("qtts-auto-entry", "1"); } catch {}
+      }
+      if (!(await O())) throw new Error("网关健康检查未通过");
       if (epoch !== accessEpoch) return;
+      clearAutomaticRetry();
       document.body.classList.add("is-unlocked");
       r("locked-note").hidden = true;
       for (const name of ["speak", "lab", "mon"]) r("nav-" + name).disabled = false;
       r("protected-controls").disabled = false;
       r("protected-controls").hidden = false;
-      r("access-status").textContent = "已自动连接 · 私有会话 · 无需手动解锁";
+      r("access-status").textContent = demo ? "演示模式 · 无需密钥" : "已自动连接 · 私有会话 · 无需手动解锁";
       await v();
       await resumeSimpleTraining();
     } catch (error) {
       if (epoch !== accessEpoch) return;
       if (error.name !== "AbortError" && reloadAutomaticEntry()) {
-        r("access-status").textContent = "正在重新获取自动私密入口，无需输入口令…";
+        r("access-status").textContent = "正在重新连接，无需密钥…";
         return;
       }
       lockAccess(error.name === "AbortError" ? "连接已停止" : "自动连接未完成（" + error.message + "）；点击“重新自动连接”，无需口令，不要重启模型");
     }
   }
   function endPrivateSession() {
+    if (accessToken === "@demo") {
+      clearAutomaticRetry();
+      location.reload();
+      return Promise.resolve();
+    }
     // In the simulator, revoking a session must not strand the user at a password form.
     // The class/session marker survives lockAccess(), which intentionally clears accessToken.
     let automatic = accessToken === "@private-cookie" || document.body.classList.contains("automatic-entry");

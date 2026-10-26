@@ -41,6 +41,7 @@ class Smoke:
         self.results: list[dict] = []
         self.profile = ""
         self.library = ""
+        self.demo = False
 
     def check(self, name: str, condition, detail=""):
         ok = bool(condition)
@@ -65,22 +66,33 @@ class Smoke:
         response = self.http.get(self.url + "/", timeout=15)
         self.check("original index is served", response.status_code == 200)
         match = ENTRY.search(response.text)
-        self.check("private grant is injected for the sandbox", match is not None)
-        if match:
-            bootstrap = f'<script>window.location.hash="qtts-entry={match.group(1)}";</script>'
-            self.check("index differs only by the private-entry adapter", response.text.replace(bootstrap, "", 1) == (ROOT / "web" / "index.html").read_text())
-            grant = match.group(1)
-            exchange = self.http.post(self.url + "/api/session/exchange", json={"grant": grant}, headers={"Origin": self.url}, timeout=15)
-            self.check("one-use grant exchanges for an HttpOnly session", exchange.status_code == 200 and self.http.cookies.get("qtts_private_session"))
-            reused = requests.post(self.url + "/api/session/exchange", json={"grant": grant}, headers={"Origin": self.url}, timeout=15)
-            self.check("used grant cannot be replayed", reused.status_code == 401)
+        self.demo = response.headers.get("x-qtts-demo") == "1"
+        if self.demo:
+            self.check("demo index has no private grant", match is None)
+            self.check("demo index has no inline access key", "window.location.hash=\"qtts-entry=" not in response.text and "Bearer " not in response.text)
+            self.http.headers.update({"X-QTTS-Demo": "1"})
+            self.check("demo session needs no cookie or key", self.json("GET", "/api/session/status").get("ready") is True and not self.http.cookies)
+            self.check("demo mode remains explicitly marked", self.demo)
+        else:
+            self.check("private grant is injected for the sandbox", match is not None)
+            if match:
+                bootstrap = f'<script>window.location.hash="qtts-entry={match.group(1)}";</script>'
+                self.check("index differs only by the private-entry adapter", response.text.replace(bootstrap, "", 1) == (ROOT / "web" / "index.html").read_text())
+                grant = match.group(1)
+                exchange = self.http.post(self.url + "/api/session/exchange", json={"grant": grant}, headers={"Origin": self.url}, timeout=15)
+                self.check("one-use grant exchanges for an HttpOnly session", exchange.status_code == 200 and self.http.cookies.get("qtts_private_session"))
+                reused = requests.post(self.url + "/api/session/exchange", json={"grant": grant}, headers={"Origin": self.url}, timeout=15)
+                self.check("used grant cannot be replayed", reused.status_code == 401)
         self.http.headers.update({"Origin": self.url})
         for asset in ("app.js", "recorder.js", "diagnostic-trace.js"):
             served = self.http.get(self.url + "/" + asset, timeout=15)
             self.check(f"original {asset} is byte-identical", served.status_code == 200 and served.content == (ROOT / "web" / asset).read_bytes())
         anonymous = requests.get(self.url + "/api/profiles", timeout=15)
         self.check("private API rejects anonymous access", anonymous.status_code == 401)
-        bad = self.http.get(self.url + "/api/profiles", headers={"Authorization": "Bearer invalid"}, timeout=15)
+        if self.demo:
+            bad = requests.get(self.url + "/api/profiles", headers={"Origin": self.url, "Authorization": "Bearer invalid"}, timeout=15)
+        else:
+            bad = self.http.get(self.url + "/api/profiles", headers={"Authorization": "Bearer invalid"}, timeout=15)
         self.check("invalid Bearer is not rescued by a valid cookie", bad.status_code == 401)
         cross = requests.get(self.url + "/api/profiles", headers={"Origin": "https://invalid.example"}, timeout=15)
         self.check("cross-origin access is rejected", cross.status_code == 403)
@@ -277,8 +289,12 @@ class Smoke:
             self.diagnostic_checks(bool(health.get("llm_key_set")))
             self.cleanup_checks()
         self.json("POST", "/api/session/logout")
-        self.request("GET", "/api/session/status", expected=401)
-        self.check("logout invalidates the server-side browser session", True)
+        if self.demo:
+            self.request("GET", "/api/session/status", expected=200)
+            self.check("demo logout never creates a password lock", True)
+        else:
+            self.request("GET", "/api/session/status", expected=401)
+            self.check("logout invalidates the server-side browser session", True)
 
 
 def main() -> int:

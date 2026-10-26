@@ -40,6 +40,8 @@ ROOT = Path(os.environ.get("QTTS_ROOT", Path(__file__).resolve().parents[1]))
 STATE = Path(os.environ.get("QTTS_STATE", ROOT / "state"))
 WEB = Path(os.environ.get("QTTS_WEB", ROOT / "web"))
 MOCK = os.environ.get("QTTS_MOCK") == "1"
+DEMO_OPEN = MOCK and os.environ.get("QTTS_DEMO_OPEN", "0") == "1"
+DEMO_HEADER = "x-qtts-demo"
 AUTO_OPEN = os.environ.get("QTTS_AUTO_OPEN") == "1"
 ALLOW_LOOPBACK_HTTP = os.environ.get("QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP") == "1"
 COOKIE_SAMESITE = os.environ.get("QTTS_AUTOENTRY_SAMESITE", "strict").strip().lower()
@@ -164,7 +166,13 @@ async def bounded_body(request: Request, limit: int) -> bytes:
     return b"".join(chunks)
 
 
+def demo_request(request: Request) -> bool:
+    return DEMO_OPEN and request.headers.get(DEMO_HEADER) == "1"
+
+
 async def require_auth(request: Request) -> None:
+    if demo_request(request):
+        return
     if request.headers.get("authorization") is not None:
         if bearer_valid(request):
             return
@@ -187,7 +195,7 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     if origin:
         response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-DeepSeek-Key"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-DeepSeek-Key, X-QTTS-Demo"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
         response.headers["Vary"] = "Origin"
     return response
@@ -1057,7 +1065,7 @@ async def telemetry(request: Request):
 
 def index_content(request: Request) -> str:
     content = (WEB / "index.html").read_text(encoding="utf-8")
-    if AUTO_OPEN and not valid_cookie(request):
+    if AUTO_OPEN and not DEMO_OPEN and not valid_cookie(request):
         try:
             grant = new_grant()
         except HTTPException:
@@ -1070,7 +1078,7 @@ def index_content(request: Request) -> str:
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index(request: Request):
-    return HTMLResponse(index_content(request), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+    return HTMLResponse(index_content(request), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-QTTS-Demo": "1" if DEMO_OPEN else "0"})
 
 
 @app.get("/{asset}", include_in_schema=False)
