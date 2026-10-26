@@ -1,4 +1,9 @@
-"""Small native PyTorch LoRA: frozen Base, FP32 trainable A/B, no PEFT guesswork."""
+"""Small native PyTorch LoRA: frozen Base, FP32 A/B, no PEFT guesswork.
+
+Training registers A/B as Parameters. Frozen inference registers the same FP32
+tensors as buffers so they cannot distort PreTrainedModel.dtype, which Qwen's
+speaker-prompt path uses as its cast target.
+"""
 from __future__ import annotations
 import hashlib
 import math
@@ -7,15 +12,21 @@ from torch import nn
 
 
 class LoRALinear(nn.Module):
-    def __init__(self,base,rank=8,alpha=16):
+    def __init__(self,base,rank=8,alpha=16,*,trainable=True):
         super().__init__()
         if not isinstance(base,nn.Linear) or not 1<=rank<=64 or not 0<alpha<=128:
             raise ValueError('unsupported LoRA linear contract')
         self.base=base;self.rank=rank;self.alpha=float(alpha)
         self.base.requires_grad_(False)
-        self.lora_A=nn.Parameter(torch.empty(rank,base.in_features,device=base.weight.device,dtype=torch.float32))
-        self.lora_B=nn.Parameter(torch.zeros(base.out_features,rank,device=base.weight.device,dtype=torch.float32))
-        nn.init.kaiming_uniform_(self.lora_A,a=math.sqrt(5))
+        if trainable:
+            self.lora_A=nn.Parameter(torch.empty(rank,base.in_features,device=base.weight.device,dtype=torch.float32))
+            self.lora_B=nn.Parameter(torch.zeros(base.out_features,rank,device=base.weight.device,dtype=torch.float32))
+            nn.init.kaiming_uniform_(self.lora_A,a=math.sqrt(5))
+        else:
+            # Frozen FP32 buffers preserve the exact inference arithmetic without
+            # becoming the first floating Parameter returned by talker.dtype.
+            self.register_buffer('lora_A',torch.empty(rank,base.in_features,device=base.weight.device,dtype=torch.float32))
+            self.register_buffer('lora_B',torch.zeros(base.out_features,rank,device=base.weight.device,dtype=torch.float32))
 
     def forward(self,x):
         result=self.base(x)
@@ -74,7 +85,7 @@ def prepare_adapter(core,weights,targets,rank,alpha):
         a=torch.as_tensor(weights[name+'.lora_A'].copy());b=torch.as_tensor(weights[name+'.lora_B'].copy())
         if a.dtype!=torch.float32 or b.dtype!=torch.float32 or a.shape!=(rank,base.in_features) or b.shape!=(base.out_features,rank) or not torch.isfinite(a).all() or not torch.isfinite(b).all():
             raise ValueError('inference adapter tensor shape/dtype/finite mismatch')
-        layer=LoRALinear(base,rank,alpha)
+        layer=LoRALinear(base,rank,alpha,trainable=False)
         with torch.no_grad():layer.lora_A.copy_(a);layer.lora_B.copy_(b)
         layer.requires_grad_(False);layer.eval()
         parent,_,leaf=name.rpartition('.');prepared.append((core.get_submodule(parent),leaf,layer))
