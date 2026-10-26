@@ -1,0 +1,44 @@
+# App dependencies and builds
+node_modules/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Local datasets are deliberately not uploaded to GitHub
+kaggle/input/*
+!kaggle/input/README.md
+!kaggle/input/.gitkeep
+
+# Generated experiment artifacts (source code remains tracked)
+kaggle/working/outputs/
+kaggle/working/checkpoints/
+kaggle/working/runs/
+kaggle/working/models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.npy
+*.npz
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
