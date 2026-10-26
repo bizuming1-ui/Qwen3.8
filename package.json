@@ -1,0 +1,14 @@
+{
+  "name": "kaggle-simulator-voice-clone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kaggle Notebook 模拟器 + 声音克隆实验台（纯前端，零依赖）",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.cjs 5173",
+    "start": "node server.cjs 5173",
+    "gen:samples": "node scripts/gen-samples.mjs"
+  },
+  "keywords": ["kaggle", "simulator", "voice-clone", "tts", "web-audio"],
+  "license": "MIT"
+}

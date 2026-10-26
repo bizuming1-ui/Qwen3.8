@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kaggle Simulator · Voice Clone Lab</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2320beff'/%3E%3Ctext x='16' y='23' font-size='18' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23081218'%3EK%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./assets/style.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ══════════════ TOP BAR ══════════════ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">K</div>
+      <div class="brand-text">
+        <div class="brand-title">Kaggle Simulator</div>
+        <div class="brand-sub">Voice Clone Lab · 本地实验沙盒</div>
+      </div>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab is-active" data-view="notebook"><span class="ti">📓</span>Notebook</button>
+      <button class="tab" data-view="data"><span class="ti">🗂</span>Data</button>
+      <button class="tab" data-view="studio"><span class="ti">🎙</span>Voice Clone</button>
+      <button class="tab" data-view="runs"><span class="ti">📈</span>Experiments</button>
+    </nav>
+
+    <div class="topbar-right">
+      <div class="session-time" id="sessionTime" title="Session 剩余时间（Kaggle 上限 12h）">
+        <span class="dot"></span><span id="sessionClock">12:00:00</span>
+      </div>
+
+      <label class="toggle" id="internetToggle" title="Internet on/off（影响 pip / 下载）">
+        <input type="checkbox" id="internetCheck" checked />
+        <span class="toggle-track"><span class="toggle-knob"></span></span>
+        <span class="toggle-label">Internet</span>
+      </label>
+
+      <div class="select-wrap">
+        <select id="accelerator" title="Accelerator">
+          <option value="t4x2">GPU T4 ×2</option>
+          <option value="p100">GPU P100</option>
+          <option value="tpu">TPU VM v3-8</option>
+          <option value="cpu">CPU only</option>
+        </select>
+      </div>
+
+      <button class="btn btn-primary" id="runAllBtn" title="Restart &amp; Run All">
+        <span class="play-ico">▶</span> Run All
+      </button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- ══════════════ SIDEBAR ══════════════ -->
+    <aside class="sidebar">
+      <div class="side-section">
+        <div class="side-title">Kernel</div>
+        <div class="kernel-card">
+          <div class="kernel-row">
+            <span class="status-dot" id="kernelDot"></span>
+            <span id="kernelStatus">Idle</span>
+            <span class="spacer"></span>
+            <span class="mono muted" id="kernelUptime">—</span>
+          </div>
+          <div class="kernel-env mono" id="kernelEnv">Python 3.11.9 · torch 2.3.1</div>
+        </div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-title">Resources</div>
+        <div class="meters">
+          <div class="meter" data-k="cpu">
+            <div class="meter-head"><span>CPU</span><span class="meter-val mono">12%</span></div>
+            <div class="meter-track"><div class="meter-fill"></div></div>
+          </div>
+          <div class="meter" data-k="ram">
+            <div class="meter-head"><span>RAM</span><span class="meter-val mono">3.1 / 29 GB</span></div>
+            <div class="meter-track"><div class="meter-fill"></div></div>
+          </div>
+          <div class="meter" data-k="vram">
+            <div class="meter-head"><span>VRAM</span><span class="meter-val mono">0.6 / 15 GB</span></div>
+            <div class="meter-track"><div class="meter-fill amber"></div></div>
+          </div>
+          <div class="meter" data-k="disk">
+            <div class="meter-head"><span>Disk</span><span class="meter-val mono">4.2 / 20 GB</span></div>
+            <div class="meter-track"><div class="meter-fill green"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-section grow">
+        <div class="side-title">Working files <span class="side-hint">/kaggle/working</span></div>
+        <ul class="file-tree mono" id="fileTree"></ul>
+      </div>
+
+      <div class="side-section">
+        <div class="side-title">Quick actions</div>
+        <div class="side-actions">
+          <button class="btn btn-ghost" id="restartBtn">↻ Restart kernel</button>
+          <button class="btn btn-ghost" id="clearBtn">␡ Clear outputs</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ══════════════ VIEWS ══════════════ -->
+    <main class="views">
+
+      <!-- ─── NOTEBOOK ─── -->
+      <section class="view is-active" id="view-notebook">
+        <div class="nb-head">
+          <div>
+            <h1 class="nb-title">voice-clone-lab.ipynb <span class="badge badge-blue">Draft</span></h1>
+            <p class="nb-meta">Zero-shot Voice Cloning · 零样本声音克隆实验 · <span id="nbCellCount">0</span> cells · 预计 <span id="nbEta">42s</span></p>
+          </div>
+          <div class="nb-tools">
+            <button class="btn btn-ghost sm" data-add="code">+ Code</button>
+            <button class="btn btn-ghost sm" data-add="md">+ Markdown</button>
+            <span class="divider-v"></span>
+            <span class="save-hint" id="saveHint">已保存到本地</span>
+          </div>
+        </div>
+        <div class="notebook" id="notebook"></div>
+        <div class="nb-footer">
+          <button class="btn btn-ghost sm" id="addCellBottom">+ 添加单元格</button>
+        </div>
+      </section>
+
+      <!-- ─── DATA ─── -->
+      <section class="view" id="view-data">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">Datasets 数据集</h1>
+            <p class="page-sub">挂载模拟数据集，或上传你自己的音频作为克隆目标音色。</p>
+          </div>
+          <div class="page-actions">
+            <label class="btn btn-primary" for="fileUpload">⬆ Upload audio</label>
+            <input type="file" id="fileUpload" accept="audio/*" multiple hidden />
+          </div>
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          <div class="dz-ico">🎧</div>
+          <div class="dz-main">把音频文件拖到这里 <span class="muted">（或点击 Upload audio）</span></div>
+          <div class="dz-sub">wav / mp3 / m4a / ogg · 会真实解码并做音高、频谱分析</div>
+          <div class="dz-actions">
+            <button class="btn btn-ghost sm" id="sampleMaleBtn" type="button">🎧 加载示例男声</button>
+            <button class="btn btn-ghost sm" id="sampleFemaleBtn" type="button">🎧 加载示例女声</button>
+          </div>
+        </div>
+
+        <div class="grid-3" id="datasetGrid"></div>
+
+        <div class="card" id="datasetDetail">
+          <div class="card-head">
+            <h2 class="card-title" id="ddTitle">数据集</h2>
+            <span class="badge" id="ddBadge">mounted</span>
+          </div>
+          <div class="dd-body">
+            <div class="dd-tree mono" id="ddTree"></div>
+            <div class="dd-samples" id="ddSamples"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── STUDIO ─── -->
+      <section class="view" id="view-studio">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">Voice Clone Studio</h1>
+            <p class="page-sub">选择目标音色 → 输入文本 → 走完整流水线 → 试听克隆结果（音高/共振峰来自目标样本）。</p>
+          </div>
+          <div class="page-actions">
+            <span class="badge badge-green" id="modelBadge">checkpoint: ep18 · 已就绪</span>
+          </div>
+        </div>
+
+        <div class="studio-grid">
+          <!-- speaker column -->
+          <div class="card speaker-card">
+            <div class="card-head"><h2 class="card-title">Target speaker</h2><span class="badge">音色库</span></div>
+            <div class="speaker-list" id="speakerList"></div>
+            <div class="speaker-detail" id="speakerDetail"></div>
+            <label class="btn btn-ghost block" for="fileUpload2">＋ 上传我的声音</label>
+            <input type="file" id="fileUpload2" accept="audio/*" hidden />
+          </div>
+
+          <!-- main column -->
+          <div class="studio-main">
+            <div class="card">
+              <div class="card-head"><h2 class="card-title">Synthesis script</h2><span class="badge badge-blue" id="charCount">0 chars</span></div>
+              <textarea id="ttsText" class="text-input" rows="4">你好，这是用你的声音合成的一段话。声音克隆系统已经跑在你的 Kaggle notebook 里了。</textarea>
+              <div class="sliders">
+                <div class="slider-row">
+                  <label>语速 <span class="mono" id="speedVal">1.00×</span></label>
+                  <input type="range" id="speed" min="0.6" max="1.6" step="0.05" value="1" />
+                </div>
+                <div class="slider-row">
+                  <label>情感强度 <span class="mono" id="exprVal">0.65</span></label>
+                  <input type="range" id="expr" min="0" max="1" step="0.05" value="0.65" />
+                </div>
+                <div class="slider-row">
+                  <label>音高偏移 <span class="mono" id="pitchVal">0 st</span></label>
+                  <input type="range" id="pitch" min="-6" max="6" step="1" value="0" />
+                </div>
+              </div>
+              <button class="btn btn-primary block lg" id="synthesizeBtn">▶ 合成语音 (inference)</button>
+            </div>
+
+            <div class="card pipeline-card">
+              <div class="card-head"><h2 class="card-title">Pipeline</h2><span class="badge" id="pipeStatus">idle</span></div>
+              <div class="pipeline" id="pipeline">
+                <div class="pipe-step" data-i="0"><span class="ps-ico">📝</span><span>Text</span></div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step" data-i="1"><span class="ps-ico">🔤</span><span>G2P</span></div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step" data-i="2"><span class="ps-ico">🧠</span><span>Acoustic</span></div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step" data-i="3"><span class="ps-ico">🌈</span><span>Mel</span></div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step" data-i="4"><span class="ps-ico">🌊</span><span>Vocoder</span></div>
+              </div>
+              <div class="phoneme-strip mono" id="phonemes">—</div>
+            </div>
+
+            <div class="card">
+              <div class="card-head">
+                <h2 class="card-title">Output</h2>
+                <div class="card-head-actions">
+                  <button class="btn btn-ghost sm" id="playBtn" disabled>▶ Play</button>
+                  <button class="btn btn-ghost sm" id="downloadBtn" disabled>⤓ .wav</button>
+                </div>
+              </div>
+              <canvas class="wave-canvas" id="outWave" height="120"></canvas>
+              <canvas class="spec-canvas" id="outSpec" height="140"></canvas>
+              <div class="metrics-row" id="outMetrics"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ─── RUNS ─── -->
+      <section class="view" id="view-runs">
+        <div class="page-head">
+          <div>
+            <h1 class="page-title">Experiments 训练实验</h1>
+            <p class="page-sub">模拟训练任务：真实随机过程的 loss 曲线、资源占用、checkpoint 产出，可一键发布到 Studio。</p>
+          </div>
+        </div>
+
+        <div class="runs-grid">
+          <div class="card">
+            <div class="card-head"><h2 class="card-title">New run</h2></div>
+            <div class="form-grid">
+              <label>Model
+                <select id="cfgModel">
+                  <option value="vits">VITS (端到端)</option>
+                  <option value="tacotron2">Tacotron2 + HiFi-GAN</option>
+                  <option value="fastspeech2">FastSpeech2 + HiFi-GAN</option>
+                </select>
+              </label>
+              <label>Dataset
+                <select id="cfgDataset">
+                  <option>LJSpeech-1.1</option>
+                  <option>VCTK-0.92</option>
+                  <option>LibriTTS-clean</option>
+                  <option>My-Voice-Sample</option>
+                </select>
+              </label>
+              <label>Epochs <input type="number" id="cfgEpochs" value="20" min="1" max="200" /></label>
+              <label>Batch size <input type="number" id="cfgBatch" value="16" min="1" max="64" /></label>
+              <label>LR <input type="number" id="cfgLr" value="0.0002" step="0.0001" /></label>
+              <label>Precision
+                <select id="cfgPrec"><option>fp16</option><option>bf16</option><option>fp32</option></select>
+              </label>
+            </div>
+            <button class="btn btn-primary block" id="startRunBtn">▶ Start training</button>
+          </div>
+
+          <div class="card run-live">
+            <div class="card-head">
+              <h2 class="card-title">Live</h2>
+              <span class="badge" id="runStatus">idle</span>
+            </div>
+            <div class="progress-lg"><div class="progress-lg-fill" id="runProgress"></div><span id="runProgressText" class="mono">0%</span></div>
+            <canvas id="lossChart" class="chart-canvas" height="200"></canvas>
+            <div class="run-stats" id="runStats"></div>
+            <pre class="terminal" id="runLog">$ 等待启动…</pre>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2 class="card-title">Runs</h2><span class="badge" id="runCountBadge">0</span></div>
+          <div class="table-wrap"><table class="data-table" id="runsTable"></table></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
