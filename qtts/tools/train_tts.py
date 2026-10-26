@@ -47,8 +47,8 @@ def main(argv=None):
             import traceback
             traceback.print_exc() # Private rank log only, not the controller's public receipt.
         from resource_limits import UploadRejected
-        if isinstance(error,UploadRejected):result={'status':'blocked' if error.code==503 else 'rejected','code':error.code,'reason':str(error)}
-        else:result={'status':'failed','reason':'training did not complete; inspect private local run receipts'}
+        if isinstance(error,UploadRejected):result={'status':'blocked' if error.code==503 else 'rejected','code':error.code,'reason':str(error),'error_type':type(error).__name__}
+        else:result={'status':'failed','reason':'training did not complete; inspect private local run receipts','error_type':type(error).__name__}
         print(json.dumps(result,ensure_ascii=False));return 2
 
 

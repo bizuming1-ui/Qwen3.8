@@ -152,6 +152,21 @@ def save_checkpoint(request,core,speaker,targets,reports):
         shutil.rmtree(pending);raise
 
 
+def rank_error_type(path):
+    """Extract only a bounded exception class from a private rank receipt."""
+    try:
+        raw=Path(path).read_bytes()[-262144:]
+    except OSError:
+        return None
+    for line in reversed(raw.splitlines()):
+        try:row=json.loads(line)
+        except (ValueError,UnicodeError):continue
+        if not isinstance(row,dict) or row.get('status') in ('ok','completed'):continue
+        value=row.get('error_type')
+        if isinstance(value,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}',value):return value
+    return None
+
+
 def run_controller(args,tool):
     validate_options(args)
     codes=TrainingCodesStore.configured(args.state,UploadLimits.from_env())
@@ -211,9 +226,18 @@ def run_controller(args,tool):
                     codes.verify(args.id,args.manifest_sha256)
                     if base_fingerprint(model_dir)!=args.model_sha256 or not (run/'adapter/manifest.json').is_file():outcome='failed'
                 except Exception:outcome='failed'
+            error_types={str(rank):value for rank in range(len(processes))
+                         if (value:=rank_error_type(run/f'rank{rank}.log')) is not None}
+            controller_error={}
+            try:controller_error=json.loads((run/'controller-error.json').read_bytes())
+            except (OSError,ValueError,UnicodeError):pass
+            controller_type=controller_error.get('error_type') if isinstance(controller_error,dict) else None
+            if isinstance(controller_type,str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,79}',controller_type):
+                error_types['controller']=controller_type
             receipt={'status':outcome,'job_id':run.name,'rank_exit_codes':[p.returncode for p in processes],
                      'checkpoint_relative_directory':f'training_runs/{run.name}/adapter' if outcome=='completed' else None,
-                     'optimizer_execution_observed':outcome=='completed','quality_verified':False,'inference_reload_verified':False}
+                     'optimizer_execution_observed':outcome=='completed','quality_verified':False,'inference_reload_verified':False,
+                     'error_types':error_types}
             write_json(run/'result.json',receipt)
             return receipt
 

@@ -80,17 +80,21 @@ def _log(job, message):
 
 
 def _error_text(error):
-    if isinstance(error, UploadRejected):
-        return str(error)[:500]
     text = str(error).strip()
-    return (text or "operation failed; inspect the local training receipt")[:500]
+    if text:
+        return text[:500]
+    # Some third-party exceptions have an empty str(). Preserve a safe, useful
+    # category instead of turning every such failure into the same opaque text.
+    return "%s: no exception message; inspect the local training receipt" % type(error).__name__
 
 
 def _fail(job, stage, error, *, recoverable=True):
-    _update(job, state="error", stage=stage, error=_error_text(error), error_code=stage,
+    message = _error_text(error)
+    _update(job, state="error", stage=stage, error=message, error_code=stage,
+            error_type=type(error).__name__,
             training_required=stage == "real_training_required", recoverable=bool(recoverable),
             quality_verified=False, inference_reload_verified=bool(job.get("inference_reload_verified", False)))
-    _log(job, "FAILED: " + _error_text(error))
+    _log(job, "FAILED [%s]: %s" % (type(error).__name__, message))
 
 
 def _load_jobs():
@@ -103,7 +107,7 @@ def _load_jobs():
         if value.get("state") == "running":
             value.update(state="error", stage="service_restarted",
                          error="training service restarted; inspect the saved run before retrying",
-                         recoverable=bool(value.get("run_id")))
+                         error_type="ServiceRestarted", recoverable=bool(value.get("run_id")))
         JOBS[value["id"]] = value
 
 
@@ -133,10 +137,22 @@ def _base_directory():
     return path.absolute() if path.is_absolute() and path.is_dir() else None
 
 
-def preflight(*, deep=False):
+def preflight(*, deep=False, progress=None):
+    def mark(step):
+        if progress is not None:
+            progress(step)
+
+    mark("hardware_inventory")
     gpu = _gpu_inventory()
     base = _base_directory()
+    mark("dependency_check")
     dependencies = {name: importlib.util.find_spec(name) is not None for name in ("torch", "qwen_tts", "safetensors")}
+    from qwen_compat import installed_version
+    provider_version = installed_version("qwen-tts-hf")
+    provider_name = "qwen-tts-hf"
+    if not provider_version:
+        provider_name = "qwen-tts"
+        provider_version = installed_version(provider_name)
     reasons = []
     if MOCK:
         reasons.append("browser_mock_is_not_real_training")
@@ -146,6 +162,8 @@ def preflight(*, deep=False):
         reasons.append("materialized_local_Base1.7B_required")
     if not all(dependencies.values()):
         reasons.append("torch_qwen_tts_safetensors_dependencies_required")
+    if dependencies["qwen_tts"] and not provider_version:
+        reasons.append("qwen_provider_distribution_metadata_required")
     report = {
         "status": "mock" if MOCK else "ready" if not reasons else "blocked",
         "can_train": not reasons,
@@ -155,6 +173,7 @@ def preflight(*, deep=False):
         "base": {"materialized": base is not None, "model": base.name if base else None,
                  "base_model_sha256": os.environ.get("QTTS_BASE_SHA256") or None},
         "dependencies": dependencies,
+        "provider": {"distribution": provider_name if provider_version else None, "version": provider_version},
         "reasons": reasons,
         "quality_verified": False,
         "training_verified": False,
@@ -163,7 +182,9 @@ def preflight(*, deep=False):
         try:
             from training_job import base_fingerprint
             from training_codes import model_fingerprint
+            mark("base_fingerprint")
             base_hash = base_fingerprint(base)
+            mark("tokenizer_fingerprint")
             tokenizer_hash = model_fingerprint(base / "speech_tokenizer")
             pinned = os.environ.get("QTTS_BASE_SHA256")
             if pinned and pinned != base_hash:
@@ -178,13 +199,15 @@ def preflight(*, deep=False):
             report["fingerprint_error"] = _error_text(error)
     elif deep:
         report["can_train"] = False
-    report["can_train"] = bool(report["can_train"] and report.get("tokenizer_materialized"))
+    # This completion marker belongs to report["base"], not the report root.
+    report["can_train"] = bool(report["can_train"] and report["base"].get("tokenizer_materialized"))
     if not deep:
         # A shallow probe never claims readiness solely from environment flags.
         report["can_train"] = False if not MOCK else False
         if not report["reasons"]:
             report["status"] = "fingerprint_required"
             report["reasons"] = ["run_training_preflight_to_fingerprint_local_models"]
+    mark("complete")
     return report
 
 
@@ -237,6 +260,25 @@ def _last_json(path):
     return {}
 
 
+def _receipt_reason(receipt, fallback):
+    reason = str(receipt.get("reason") or fallback).strip()
+    details = []
+    error_type = receipt.get("error_type")
+    if isinstance(error_type, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", error_type):
+        details.append("type=" + error_type)
+    error_types = receipt.get("error_types")
+    if isinstance(error_types, dict):
+        for name in sorted(error_types):
+            value = error_types[name]
+            if (isinstance(name, str) and re.fullmatch(r"(?:0|1|controller)", name)
+                    and isinstance(value, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", value)):
+                details.append("%s=%s" % (name, value))
+    code = receipt.get("process_returncode")
+    if isinstance(code, int) and not isinstance(code, bool) and code != 0:
+        details.append("exit=" + str(code))
+    return reason + ((" [" + ", ".join(details) + "]") if details else "")
+
+
 def _rank_progress(run_id):
     result = []
     root = STATE / "training_runs" / run_id
@@ -284,8 +326,15 @@ def _run_command(job, command, *, stage, timeout, env, run_id=None, epochs=1):
                         _update(job, pct=round(pct, 1), ranks=ranks)
                 time.sleep(1.0)
         receipt = _last_json(log_path)
-        if process.returncode != 0 and receipt.get("status") in ("ok", "completed"):
-            raise StageFailure(stage, "process exit code disagrees with its terminal receipt")
+        successful = receipt.get("status") in ("ok", "completed")
+        if process.returncode != 0 and successful:
+            raise StageFailure(stage, "process exit code disagrees with its successful terminal receipt")
+        if process.returncode == 0 and not successful:
+            raise StageFailure(stage, "process exited 0 without a successful terminal receipt")
+        if not receipt:
+            raise StageFailure(stage, "process exited %s without a terminal receipt" % process.returncode)
+        receipt = dict(receipt)
+        receipt["process_returncode"] = process.returncode
         return receipt
     except StageFailure:
         if process is not None:
@@ -425,11 +474,14 @@ def _restore_and_activate(job):
 def _run(job, blobs):
     paused = False
     try:
-        report = preflight(deep=True)
+        _update(job, state="running", stage="preflight", pct=1,
+                preflight_step="hardware_inventory", optimizer_execution_observed=False)
+        report = preflight(deep=True, progress=lambda step: _update(job, preflight_step=step))
         base_directory = report.pop("_base_directory", None)
-        _update(job, state="running", stage="preflight", pct=1, preflight=report)
+        _update(job, preflight=report)
         if not report.get("can_train") and not MOCK:
-            raise StageFailure("preflight", "; ".join(report.get("reasons", ["training prerequisites failed"])))
+            raise StageFailure("preflight", "; ".join(report.get("reasons") or ["training prerequisites failed"]))
+        _log(job, "真实训练预检通过；尚未执行 optimizer" if report.get("can_train") else "MOCK 仅允许参考准备，不允许真实训练")
         _update(job, stage="reference_preparation", pct=5)
         current, preparation = _wait_analyst(job, blobs, job["name"], job.get("language", "auto"))
         dataset = preparation["dataset"]
@@ -448,8 +500,9 @@ def _run(job, blobs):
                           "--model-dir", str(base / "speech_tokenizer"), "--model-sha256", report["base"]["tokenizer_tree_sha256"],
                           "--timeout", str(int(os.environ.get("QTTS_ENCODE_TIMEOUT", "3600")))]
         encoded = _run_command(job, encode_command, stage="cpu_acoustic_encoding", timeout=3660, env=_env(cpu=True))
+        _update(job, encoding_receipt=encoded)
         if encoded.get("status") != "ok":
-            raise StageFailure("cpu_acoustic_encoding", encoded.get("reason", "CPU acoustic encoding did not complete"))
+            raise StageFailure("cpu_acoustic_encoding", _receipt_reason(encoded, "CPU acoustic encoding did not complete"))
         codes = encoded.get("result", {})
         _update(job, codes_id=codes.get("id"), codes_manifest_sha256=codes.get("manifest_sha256"),
                 codes=codes, stage="gpu_handoff", pct=55)
@@ -469,9 +522,10 @@ def _run(job, blobs):
         if job.get("allow_single_sample"):
             command.append("--allow-single-sample")
         trained = _run_command(job, command, stage="dual_t4_training", timeout=21720, env=_env(), run_id=run_id, epochs=2)
+        _update(job, training_receipt=trained)
         if trained.get("status") != "completed" or trained.get("rank_exit_codes") != [0, 0]:
-            raise StageFailure("dual_t4_training", trained.get("reason", "two-rank training did not complete; inspect rank receipts"))
-        _update(job, training_completed=True, optimizer_execution_observed=True, training_receipt=trained,
+            raise StageFailure("dual_t4_training", _receipt_reason(trained, "two-rank training did not complete; inspect rank receipts"))
+        _update(job, training_completed=True, optimizer_execution_observed=True,
                 stage="publish", pct=87)
         _publish(job)
         _update(job, stage="restore_inference", pct=92)
@@ -481,7 +535,7 @@ def _run(job, blobs):
         _wait_workers(job)
         _update(job, stage="activate", pct=97)
         _activate(job)
-        _update(job, state="done", stage="done", pct=100, error=None, error_code=None, training_required=False,
+        _update(job, state="done", stage="done", pct=100, error=None, error_code=None, error_type=None, training_required=False,
                 recoverable=False, quality_verified=False, training_verified=True, inference_paused=False)
         _log(job, "真实双 rank 训练、adapter 发布与双 worker 加载均已完成；音色/音质仍需试听与测量")
     except Exception as error:
@@ -515,8 +569,9 @@ def _new_job(name, language, blobs):
         job_id = uuid.uuid4().hex
         job = {"id": job_id, "name": name, "language": language, "state": "running", "stage": "queued", "pct": 0,
                "created": time.time(), "updated": time.time(), "log": [], "profile": None, "run_id": None,
-               "error_code": None, "training_required": False,
+               "error_code": None, "error_type": None, "training_required": False,
                "quality_verified": False, "training_verified": False, "training_completed": False,
+               "optimizer_execution_observed": False,
                "inference_reload_verified": False, "gpu_paused": False, "recoverable": True}
         JOBS[job_id] = job
         _save(job)
@@ -607,13 +662,14 @@ async def retry_activation(job_id: str):
         job["stage"] = "restore_inference"
         job["error"] = None
         job["error_code"] = None
+        job["error_type"] = None
         job["training_required"] = False
         _save(job)
     def retry():
         try:
             _restore_and_activate(job)
-            _update(job, state="done", stage="done", pct=100, quality_verified=False, training_verified=True,
-                    recoverable=False, inference_paused=False)
+            _update(job, state="done", stage="done", pct=100, error=None, error_code=None, error_type=None,
+                    quality_verified=False, training_verified=True, recoverable=False, inference_paused=False)
         except Exception as error:
             _fail(job, getattr(error, "stage", "activate"), error)
     threading.Thread(target=retry, daemon=True, name="training-activation-" + job_id).start()

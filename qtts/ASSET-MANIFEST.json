@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "source_notebook": "kaggle/working/voice_cloning.ipynb",
-  "source_notebook_sha256": "85805315109e2e05338fd7bf685bc9aa1453692f2a23fe461afc58597813b188",
+  "source_notebook_sha256": "506b854758b8009af5b08399a9c83263c5909e9887e33078a7d4a4ae7be32ae4",
   "asset_count": 74,
   "assets": {
     "LICENSE-QWEN-DERIVED.txt": {
@@ -201,8 +201,8 @@
       "sha256": "370740896c70c03885d23d32bd1980f461b6c326d1eb40ebeb45d33133183d44"
     },
     "py/training_codes.py": {
-      "bytes": 23767,
-      "sha256": "78ac55d6172d392c02d5b1a775e8ed82a404efbbdef98273d8887e7d4db0e384"
+      "bytes": 24416,
+      "sha256": "118dd5549b2aede95c241e09db3a8caf075d4e91f0a79d9b4d921e6ffb874730"
     },
     "py/training_control.py": {
       "bytes": 2323,
@@ -213,12 +213,12 @@
       "sha256": "0b9203428dfdfeacec4c82f601414bb50b4a499d6cf7aad214efe7d6c8ccf5e0"
     },
     "py/training_job.py": {
-      "bytes": 14776,
-      "sha256": "dd815bca5bb2be32fef7a02a15cc8f4bd1b3c07bd9c4d61574414b5636c0345b"
+      "bytes": 16017,
+      "sha256": "3f7725c866ba3456a260e9fab4ea8e26c08936340715f355280ef182a0e221a3"
     },
     "py/training_service.py": {
-      "bytes": 29238,
-      "sha256": "ac74e3a8d4676090c2254b4980d8e3144c11480c101d0fdc6f82d4daab5a1762"
+      "bytes": 32272,
+      "sha256": "e1629d48effcc2dcaff1292b0988f492be05b54cf314e3af8783e463f21f242b"
     },
     "py/tts_dataset.py": {
       "bytes": 6551,
@@ -257,8 +257,8 @@
       "sha256": "188e1e22948d20b72ee41e062cd7c8e36bd482901664f923aa23c9ead5a12dae"
     },
     "tools/encode_training.py": {
-      "bytes": 7046,
-      "sha256": "d8377625367b9f166a091c2ab3f6164d9c7ccda764f2920af9bbd9ac0da6c5f3"
+      "bytes": 7114,
+      "sha256": "97b512c7d36b111c74018ce48ac04e90bf81f7e8f490b48dba9d097082227281"
     },
     "tools/resource_control.py": {
       "bytes": 1930,
@@ -269,8 +269,8 @@
       "sha256": "b12f9e0af45d18e7c85b6a00e1d2c0e05b1cffc18a998f1d6cd90c8f57f27124"
     },
     "tools/train_tts.py": {
-      "bytes": 3120,
-      "sha256": "767da17ea08e094a45b244e5634ada82a20e19add77d55b31db6e0da716ad4a2"
+      "bytes": 3188,
+      "sha256": "84fe2d78b41a598acf9f831b2d252587564f4cda56dcaabdee82ebcc3782cc29"
     },
     "tools/trained_voice.py": {
       "bytes": 1756,
@@ -285,8 +285,8 @@
       "sha256": "43de4bea8040ee09e88961d7f9997ea3274b39cc82c09421b291b731a22f9f3f"
     },
     "web/app.js": {
-      "bytes": 100661,
-      "sha256": "0b69ed3b0f0a0f0715d7a1d71467b6ae05e6d36fdc624794a4115d30a0e27f45"
+      "bytes": 102216,
+      "sha256": "6899b2ef1e1c94986b4063b57fe66dc19b71806a844a3ac11a798bab96d4b826"
     },
     "web/diagnostic-trace.js": {
       "bytes": 6149,

@@ -2050,8 +2050,22 @@ registerProcessor('qtts-ring', QttsRing);
     if (typeof job.full_ref_text === "string" && job.full_ref_text)
       r("full-ref-text").value = job.full_ref_text;
     r("simple-training-bar").style.width = Math.max(0, Math.min(100, Number(job.pct) || 0)) + "%";
-    const stage = job.stage || "等待任务回执";
-    r("simple-training-status").textContent = `${Number(job.pct) || 0}% ${stage}\n${(job.log || []).slice(-4).join("\n")}${job.error ? "\n错误: " + job.error : ""}`;
+    const stageLabels = {queued: "排队", preflight: "训练预检", reference_preparation: "准备参考与完整转写",
+      cpu_acoustic_encoding: "CPU 声学编码", gpu_handoff: "双 T4 独占交接", dual_t4_training: "双 rank 真实训练",
+      publish: "发布训练声音", restore_inference: "恢复推理 worker", activate: "双 worker 加载训练声音",
+      done: "训练流程完成", service_restarted: "训练服务已重启", real_training_required: "真实训练未执行"};
+    const preflightLabels = {hardware_inventory: "检查双 T4 与本地 Base 模型", dependency_check: "检查固定训练依赖与发行版元数据",
+      base_fingerprint: "只读校验 Base 大文件（可能需要几分钟）", tokenizer_fingerprint: "只读校验 CPU 声学 tokenizer", complete: "预检步骤结束"};
+    const stage = stageLabels[job.stage] || job.stage || "等待任务回执";
+    const lines = [`${Number(job.pct) || 0}% ${stage}`];
+    if (job.stage === "preflight" && preflightLabels[job.preflight_step]) lines.push("当前步骤：" + preflightLabels[job.preflight_step]);
+    if (job.state === "error") lines.push("任务状态：已失败（不是仍在训练），请按下方类型与回执修正后重试");
+    if (job.state === "done") lines.push("任务状态：训练流程与双 worker 加载已完成");
+    lines.push(job.optimizer_execution_observed === true ? "训练证据：已观察到 optimizer 执行（不等于音色验收）" : "训练证据：尚未观察到 optimizer 执行");
+    if (job.error_type) lines.push("异常类型：" + job.error_type);
+    lines.push(...(job.log || []).slice(-4));
+    if (job.error) lines.push("错误: " + job.error);
+    r("simple-training-status").textContent = lines.join("\n");
     const receipt = {...job};
     delete receipt.full_ref_text;
     delete receipt.log;

@@ -5,7 +5,6 @@ Injected test encoders ALWAYS publish test_only, never real execution evidence.
 from __future__ import annotations
 
 from contextlib import contextmanager
-import importlib.metadata
 import fcntl
 import json
 import math
@@ -72,6 +71,21 @@ def model_fingerprint(directory):
     return digest(encode(sorted(records,key=lambda r:r['path'])))
 
 
+def qwen_package_version():
+    """Return the distribution that actually provides the qwen_tts namespace.
+
+    The reviewed Kaggle stack deliberately installs qwen-tts-hf, not qwen-tts.
+    Reading only the latter makes an otherwise valid CPU encoder fail after model
+    loading with PackageNotFoundError.  Keep the legacy provider as a fallback,
+    but never invent a version for a real execution receipt.
+    """
+    from qwen_compat import installed_version
+    version=installed_version('qwen-tts-hf') or installed_version('qwen-tts')
+    if not version:
+        raise UploadRejected('Qwen provider distribution metadata is unavailable; no encoding executed',503)
+    return version
+
+
 class QwenCPUEncoder:
     """Only production adapter; lazy imports, local offline FP32/eager CPU only."""
     def __init__(self,model_dir,expected_hash):
@@ -86,6 +100,7 @@ class QwenCPUEncoder:
             install_qwen_rope_bridge()
         except ImportError:raise UploadRejected("tokenizer dependencies unavailable; no encoding executed",503) from None
         torch.set_num_threads(2)
+        self.version=qwen_package_version()
         self.tokenizer=Qwen3TTSTokenizer.from_pretrained(str(self.directory),device_map='cpu',dtype=torch.float32,
                           attn_implementation='eager',local_files_only=True,trust_remote_code=False,use_safetensors=True)
         cfg=self.tokenizer.config
@@ -96,7 +111,6 @@ class QwenCPUEncoder:
             or str(self.tokenizer.device)!='cpu' or self.tokenizer.model.dtype!=torch.float32):
             raise UploadRejected("loaded tokenizer contract mismatch",409)
         self.tokenizer.model.eval()
-        self.version=importlib.metadata.version('qwen-tts')
         self.finish()
 
     def __call__(self,waveform):

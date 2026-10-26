@@ -74,8 +74,8 @@ def worker(args):
             sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'py'))
             from resource_limits import UploadRejected
             if isinstance(error,UploadRejected):
-                result={'status':'blocked' if error.code==503 else 'rejected','operation':args.operation,'reason':str(error),'code':error.code}
-            else:result={'status':'failed','operation':args.operation,'reason':'operation failed; inspect local store before retry'}
+                result={'status':'blocked' if error.code==503 else 'rejected','operation':args.operation,'reason':str(error),'code':error.code,'error_type':type(error).__name__}
+            else:result={'status':'failed','operation':args.operation,'reason':'operation failed; inspect local store before retry','error_type':type(error).__name__}
             code=2
     with open(args._report,'w',encoding='utf-8') as stream:
         os.chmod(args._report,0o600);json.dump(result,stream,ensure_ascii=False,allow_nan=False)
