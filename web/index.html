@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <meta name="description" content="Qwen3.8 Voice Lab — a local Kaggle-style notebook workspace with project-file persistence.">
+  <title>Qwen3.8 Voice Lab · Notebook Simulator</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="#workspace" aria-label="Qwen3.8 Voice Lab 首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="brand-wordmark">QWEN<span>3.8</span></span>
+        <span class="brand-tag">VOICE LAB</span>
+      </a>
+
+      <div class="workspace-switcher">
+        <span class="workspace-avatar">Q</span>
+        <span class="workspace-copy"><strong>Qwen3.8</strong><small>本地项目工作区</small></span>
+        <span class="switcher-dots" aria-hidden="true">···</span>
+      </div>
+
+      <div class="sidebar-section-label">工作区</div>
+      <nav class="primary-nav">
+        <button class="nav-item active" type="button" data-target="workspace">
+          <span class="nav-icon" aria-hidden="true">▦</span><span>Notebook 工作台</span>
+          <span class="nav-active-indicator"></span>
+        </button>
+        <button class="nav-item" type="button" data-target="historyPanel">
+          <span class="nav-icon nav-icon-chart" aria-hidden="true">⌁</span><span>实验预演记录</span>
+          <span id="experimentCount" class="nav-count">0</span>
+        </button>
+      </nav>
+
+      <div class="tree-heading">
+        <span class="sidebar-section-label">项目文件</span>
+        <span class="tree-root-label">QWEN3.8</span>
+      </div>
+      <div class="project-tree">
+        <div class="tree-row tree-root"><span class="chevron">⌄</span><span class="tree-folder-icon">◫</span><span>Qwen3.8</span></div>
+        <div class="tree-row tree-folder"><span class="chevron">⌄</span><span class="tree-folder-icon">▰</span><span>notebooks</span><span id="notebookCount" class="tree-count">0</span></div>
+        <div id="notebookTree" class="tree-children" aria-label="已保存的 Notebook">
+          <div class="tree-empty">保存后的 Notebook 会显示在这里</div>
+        </div>
+        <div class="tree-row tree-folder"><span class="chevron">⌄</span><span class="tree-folder-icon">▰</span><span>experiments</span></div>
+        <div class="tree-leaf tree-muted"><span class="tree-file-icon">◷</span><span>静态预检记录</span></div>
+      </div>
+
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-status">
+        <span id="connectionDot" class="status-dot checking"></span>
+        <span><strong id="connectionText">正在连接项目…</strong><small id="connectionSubtext">检查本地保存服务</small></span>
+      </div>
+      <div class="sidebar-footer">
+        <span class="avatar-small">VL</span>
+        <span class="footer-project"><strong>Voice cloning</strong><small>实验空间</small></span>
+        <button class="icon-button subtle" id="aboutButton" type="button" aria-label="关于本地模拟器" title="关于本地模拟器">?</button>
+      </div>
+    </aside>
+
+    <main id="workspace" class="main-content">
+      <header class="topbar">
+        <div class="breadcrumbs"><span>Qwen3.8</span><span class="crumb-divider">/</span><strong>Notebook 工作台</strong></div>
+        <div class="topbar-actions">
+          <span class="persistence-chip"><span class="persistence-dot"></span>项目文件持久化</span>
+          <button class="icon-button" id="helpButton" type="button" aria-label="查看使用说明" title="使用说明">i</button>
+        </div>
+      </header>
+
+      <section class="page-heading">
+        <div class="heading-copy">
+          <div class="eyebrow"><span class="eyebrow-mark"></span> QWEN 3.8 <span class="eyebrow-slash">/</span> LOCAL NOTEBOOK LAB</div>
+          <h1>语音克隆实验工作区</h1>
+          <p>把 Kaggle 导出的完整代码粘贴进来；保存后会真实写入当前项目的 <code>notebooks/</code>。</p>
+        </div>
+        <div class="heading-actions">
+          <input id="fileInput" class="visually-hidden" type="file" accept=".py,.ipynb,application/json,text/x-python,text/plain">
+          <label class="button button-secondary import-button" for="fileInput"><span class="button-icon">↑</span>导入 .py / .ipynb</label>
+          <button id="saveButton" class="button button-primary" type="button"><span class="save-icon">▣</span><span>保存到项目</span></button>
+        </div>
+      </section>
+
+      <section class="notice-banner" aria-label="保存说明">
+        <span class="notice-icon" aria-hidden="true">↳</span>
+        <div class="notice-copy"><strong>保存在仓库，不只留在 Kaggle</strong><span>每次保存会在项目中生成可编辑的 <code>.py</code> 源文件和标准 <code>.ipynb</code> Notebook。</span></div>
+        <span class="notice-path">./notebooks/</span>
+      </section>
+
+      <section class="notebook-toolbar" aria-label="Notebook 设置">
+        <div class="notebook-name-wrap">
+          <span class="notebook-file-badge" aria-hidden="true">Py</span>
+          <label class="notebook-name-field"><span>文件名</span><input id="notebookName" type="text" value="voice-clone-experiment" maxlength="80" spellcheck="false" autocomplete="off" aria-label="Notebook 文件名"></label>
+        </div>
+        <div class="toolbar-right">
+          <span id="saveStatus" class="save-status"><span class="save-status-dot"></span><span>尚未保存</span></span>
+          <label class="runtime-select-wrap"><span class="runtime-label">预演配置</span><select id="runtimeSelect" aria-label="选择预演环境"><option value="local-cpu">本地 CPU</option><option value="kaggle-t4">Kaggle T4 · 模拟</option><option value="kaggle-p100">Kaggle P100 · 模拟</option></select><span class="select-caret">⌄</span></label>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <section class="editor-column" aria-label="代码编辑器">
+          <div class="panel editor-panel">
+            <div class="panel-heading editor-panel-heading">
+              <div><div class="panel-kicker">NOTEBOOK SOURCE</div><h2>代码单元</h2></div>
+              <div class="editor-actions">
+                <button id="copyButton" class="text-button" type="button" title="复制全部代码"><span aria-hidden="true">▢</span>复制</button>
+                <button id="clearButton" class="text-button danger-text" type="button" title="清空编辑区"><span aria-hidden="true">×</span>清空</button>
+              </div>
+            </div>
+            <div class="cell-toolbar">
+              <div class="cell-meta"><span class="cell-prompt">In&nbsp;[&nbsp;]</span><span class="language-pill">Python 3</span><span class="cell-hint"><code># %%</code> 可保留多个 Notebook 单元</span></div>
+              <button id="runShortcut" class="button button-run button-small" type="button"><span class="play-icon">▶</span>静态预检</button>
+            </div>
+            <div class="code-editor-frame">
+              <div id="lineNumbers" class="line-numbers" aria-hidden="true">1</div>
+              <textarea id="codeEditor" class="code-editor" aria-label="粘贴 Kaggle Notebook Python 代码" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" placeholder="# 在这里粘贴完整的 Kaggle Python 代码\n# 保存后，项目会同时生成 .py 和 .ipynb 文件。\n# 若代码中包含 # %% 分隔符，保存时会转换成独立 Notebook 单元。\n\n"></textarea>
+            </div>
+            <div class="editor-footer"><span><span class="footer-dot"></span>Python 源码</span><span id="codeStats">0 行&nbsp; · &nbsp;0 字符</span><span>UTF-8</span></div>
+          </div>
+          <div class="editor-note"><span class="note-icon">⌘</span><span>支持直接粘贴 Kaggle 导出的 <strong>.py</strong> 内容，也可导入 Notebook 文件；浏览器草稿只作临时恢复，点击“保存到项目”才会写入仓库。</span></div>
+        </section>
+
+        <aside class="right-column" aria-label="实验配置和预检">
+          <section class="panel simulator-panel">
+            <div class="panel-heading simulator-heading">
+              <div><div class="panel-kicker">EXPERIMENT SIMULATOR</div><h2>实验预演</h2></div>
+              <span class="simulator-badge"><span></span>SIMULATOR</span>
+            </div>
+            <div class="simulator-disclaimer"><span class="disclaimer-icon">!</span><p><strong>不会执行你的 Python 代码</strong><br>只做静态环境预检与记录；不连接 Kaggle、不训练模型，也不模拟真实 GPU 性能。</p></div>
+
+            <div class="config-heading"><span>预演参数</span><span class="config-caption">仅用于实验记录</span></div>
+            <label class="config-field full-field"><span>运行环境</span><span class="select-shell"><select id="simRuntime"><option value="local-cpu">本地 CPU（模拟）</option><option value="kaggle-t4">Kaggle T4（模拟）</option><option value="kaggle-p100">Kaggle P100（模拟）</option></select><span class="select-caret">⌄</span></span></label>
+            <div class="config-grid">
+              <label class="config-field"><span>训练轮数 <small>epochs</small></span><input id="epochsInput" type="number" min="1" max="9999" value="50"></label>
+              <label class="config-field"><span>批大小 <small>batch size</small></span><input id="batchInput" type="number" min="1" max="4096" value="16"></label>
+              <label class="config-field full-field"><span>采样率 <small>sample rate</small></span><span class="input-suffix"><input id="sampleRateInput" type="number" min="8000" max="192000" step="1000" value="24000"><em>Hz</em></span></label>
+            </div>
+            <button id="preflightButton" class="button button-dark-run" type="button"><span class="play-icon">▶</span><span>生成静态预检报告</span><span class="button-arrow">↗</span></button>
+
+            <div class="report-heading"><span>最近一次预检</span><span id="reportBadge" class="report-state">等待代码</span></div>
+            <div id="checksContainer" class="checks-container"><div class="empty-report"><span class="empty-report-icon">⌕</span><span>粘贴代码后即可检查<br>Notebook 结构与 Kaggle 环境引用</span></div></div>
+          </section>
+
+          <section id="historyPanel" class="panel history-panel">
+            <div class="panel-heading history-heading"><div><div class="panel-kicker">SAVED TO PROJECT</div><h2>实验记录</h2></div><span id="historyCount" class="history-count">0</span></div>
+            <div id="experimentsList" class="experiments-list"><div class="history-empty">尚无预演记录</div></div>
+            <div class="history-footnote"><span class="history-footnote-dot"></span>记录以 JSON 文件保存在 <code>experiments/</code></div>
+          </section>
+        </aside>
+      </div>
+
+      <footer class="page-footer"><span>Qwen3.8 Voice Lab</span><span>本地工作区 · 项目级持久化</span><span id="footerRuntime">Python 3 · 静态预检模拟器</span></footer>
+    </main>
+  </div>
+
+  <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+  <dialog id="aboutDialog" class="about-dialog">
+    <form method="dialog"><button class="dialog-close" aria-label="关闭">×</button></form>
+    <span class="dialog-brand-mark"><i></i><i></i><i></i><i></i><i></i></span>
+    <div class="panel-kicker">QWEN 3.8 · LOCAL WORKSPACE</div>
+    <h2>Kaggle 风格的本地工作台</h2>
+    <p>这里可以粘贴或导入 Kaggle Notebook 代码，并将源码与标准 .ipynb 文件真实保存在当前 Git 项目的 <code>notebooks/</code> 目录。</p>
+    <p>“静态预检”仅分析代码文本并保存实验记录；它不会运行 Python、训练语音模型、访问 Kaggle 数据集或提供真实 GPU。请在 Kaggle 或已配置好的本机环境中执行训练。</p>
+    <div class="dialog-paths"><span>源码 <code>notebooks/*.py</code></span><span>Notebook <code>notebooks/*.ipynb</code></span><span>预检记录 <code>experiments/*.json</code></span></div>
+  </dialog>
+</body>
+</html>
