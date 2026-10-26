@@ -1,0 +1,11 @@
+# CPU/mock browser runtime. Real Qwen CUDA dependencies are intentionally separate.
+numpy==1.26.4
+scipy==1.14.1
+fastapi==0.116.1
+uvicorn==0.35.0
+python-multipart==0.0.20
+soundfile==0.13.1
+librosa==0.11.0
+noisereduce==3.0.3
+requests==2.32.4
+httpx==0.28.1

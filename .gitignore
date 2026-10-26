@@ -38,6 +38,11 @@ kaggle/working/models/
 *.npy
 *.npz
 
+# QTTS local toolchains, runtime state, private voices and build products
+.tools/
+qtts/state/
+qtts/go/gateway/gateway
+
 # OS / editor
 .DS_Store
 .vscode/

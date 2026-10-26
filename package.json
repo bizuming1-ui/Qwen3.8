@@ -8,7 +8,12 @@
     "dev": "tsx server/index.ts",
     "build": "tsc --noEmit && vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "qtts:setup": "bash scripts/setup_qtts.sh",
+    "qtts": "bash scripts/start_qtts.sh",
+    "qtts:unit": "PYTHONPATH=qtts/py .venv/bin/python -m unittest discover -s qtts/py -p 'test_arena_*.py' -v && node --check qtts/web/app.js && node --check qtts/web/recorder.js && node --check qtts/web/diagnostic-trace.js",
+    "qtts:smoke": ".venv/bin/python qtts/tools/arena_smoke.py",
+    "qtts:test": "npm run qtts:unit && npm run qtts:smoke"
   },
   "engines": {
     "node": ">=22.12.0"
