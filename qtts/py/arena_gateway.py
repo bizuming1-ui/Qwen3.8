@@ -42,6 +42,9 @@ WEB = Path(os.environ.get("QTTS_WEB", ROOT / "web"))
 MOCK = os.environ.get("QTTS_MOCK") == "1"
 AUTO_OPEN = os.environ.get("QTTS_AUTO_OPEN") == "1"
 ALLOW_LOOPBACK_HTTP = os.environ.get("QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP") == "1"
+COOKIE_SAMESITE = os.environ.get("QTTS_AUTOENTRY_SAMESITE", "strict").strip().lower()
+if COOKIE_SAMESITE not in ("strict", "lax", "none"):
+    COOKIE_SAMESITE = "strict"
 ACCESS_TOKEN = os.environ.get("QTTS_ACCESS_TOKEN", "")
 LLM_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 LLM_BASE = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com")).rstrip("/")
@@ -185,7 +188,11 @@ async def security_headers(request: Request, call_next):
 
 def set_session_cookie(response: Response, request: Request, value: str, max_age: int) -> None:
     secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https" or request.headers.get("origin", "").startswith("https://")
-    response.set_cookie(COOKIE_NAME, value, max_age=max_age, path="/", httponly=True, secure=secure, samesite="strict")
+    # None is opt-in for the embedded Arena preview; browsers require Secure.
+    # Keep direct loopback HTTP usable by retaining Strict when TLS is absent.
+    same_site = COOKIE_SAMESITE if COOKIE_SAMESITE != "none" or secure else "strict"
+    secure = secure or same_site == "none"
+    response.set_cookie(COOKIE_NAME, value, max_age=max_age, path="/", httponly=True, secure=secure, samesite=same_site)
 
 
 def new_grant() -> str:

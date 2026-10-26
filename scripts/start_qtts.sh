@@ -19,6 +19,9 @@ export QTTS_MOCK_SPEED="${QTTS_MOCK_SPEED:-3.0}"
 export QTTS_NO_RUST="${QTTS_NO_RUST:-1}"
 export QTTS_AUTO_OPEN="${QTTS_AUTO_OPEN:-1}"
 export QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP="${QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP:-1}"
+# The preview is embedded on a different top-level origin. Keep the session
+# HttpOnly, but allow its Secure cookie in that iframe; production stays Strict.
+export QTTS_AUTOENTRY_SAMESITE="${QTTS_AUTOENTRY_SAMESITE:-none}"
 export PYTHONUNBUFFERED=1
 
 mkdir -p "$QTTS_STATE"
