@@ -1065,7 +1065,12 @@ async def telemetry(request: Request):
 
 def index_content(request: Request) -> str:
     content = (WEB / "index.html").read_text(encoding="utf-8")
-    if AUTO_OPEN and not DEMO_OPEN and not valid_cookie(request):
+    if DEMO_OPEN:
+        # A non-secret capability tells the browser to render the console first.
+        # No network probe, grant, cookie, or token is needed to unlock the demo UI.
+        bootstrap = '<script>window.QTTS_DEMO_OPEN=1;</script>'
+        return content.replace('<script src="app.js"></script>', bootstrap + '<script src="app.js?demo=direct"></script>', 1)
+    if AUTO_OPEN and not valid_cookie(request):
         try:
             grant = new_grant()
         except HTTPException:

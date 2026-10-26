@@ -624,6 +624,24 @@ registerProcessor('qtts-ring', QttsRing);
     await resumeSimpleTraining();
   }
 
+  function showDemoConsole() {
+    // DEMO_OPEN is a non-secret server flag. Render the two real QTTS views
+    // immediately; an unavailable gateway must never send the demo back to login.
+    accessToken = "@demo";
+    document.body.classList.add("automatic-entry", "demo-open", "is-unlocked");
+    r("access-panel").hidden = true;
+    r("btn-lock").hidden = true;
+    r("btn-lock-dialog").hidden = true;
+    r("locked-note").hidden = true;
+    for (const name of ["speak", "lab", "mon"]) r("nav-" + name).disabled = false;
+    r("protected-controls").disabled = false;
+    r("protected-controls").hidden = false;
+    r("access-status").textContent = "演示模式 · 无需密钥";
+    r("conn").textContent = "演示模式 · 无需密钥";
+    r("conn").className = "pill ok";
+    clearAutomaticRetry();
+  }
+
   async function automaticEntry() {
     const epoch = accessEpoch;
     const hash = new URLSearchParams(location.hash.slice(1));
@@ -631,6 +649,24 @@ registerProcessor('qtts-ring', QttsRing);
     // Drop the one-use capability before the first fetch or API call.
     if (hash.has("qtts-entry")) history.replaceState(null, "", location.pathname + location.search);
     const invalidGrant = Boolean(grant && !/^[A-Za-z0-9_-]{43}$/.test(grant));
+    if (window.QTTS_DEMO_OPEN === 1) {
+      // Unlock synchronously, before the first network request. This is the
+      // browser experiment path requested for the Arena MOCK preview.
+      showDemoConsole();
+      try {
+        await O();
+        if (epoch !== accessEpoch) return;
+        await v();
+        await resumeSimpleTraining();
+      } catch {
+        // Keep recording and the conversation views visible even offline.
+        if (epoch === accessEpoch) {
+          r("conn").textContent = "演示界面已打开 · 网关待连接";
+          r("conn").className = "pill bad";
+        }
+      }
+      return;
+    }
     let automaticHint = Boolean(grant);
     try { automaticHint = automaticHint || sessionStorage.getItem("qtts-auto-entry") === "1"; } catch {}
     if (automaticHint) document.body.classList.add("automatic-entry");
@@ -670,10 +706,7 @@ registerProcessor('qtts-ring', QttsRing);
       if (epoch !== accessEpoch) return;
       document.body.classList.add("automatic-entry");
       if (demo) {
-        document.body.classList.add("demo-open");
-        r("access-panel").hidden = true;
-        r("btn-lock").hidden = true;
-        r("btn-lock-dialog").hidden = true;
+        showDemoConsole();
       } else {
         try { sessionStorage.setItem("qtts-auto-entry", "1"); } catch {}
       }
@@ -690,6 +723,12 @@ registerProcessor('qtts-ring', QttsRing);
       await resumeSimpleTraining();
     } catch (error) {
       if (epoch !== accessEpoch) return;
+      if (accessToken === "@demo" || document.body.classList.contains("demo-open")) {
+        showDemoConsole();
+        r("conn").textContent = "演示界面已打开 · 网关待连接";
+        r("conn").className = "pill bad";
+        return;
+      }
       if (error.name !== "AbortError" && reloadAutomaticEntry()) {
         r("access-status").textContent = "正在重新连接，无需密钥…";
         return;
