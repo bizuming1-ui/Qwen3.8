@@ -45,6 +45,7 @@ ALLOW_LOOPBACK_HTTP = os.environ.get("QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP") == "1
 COOKIE_SAMESITE = os.environ.get("QTTS_AUTOENTRY_SAMESITE", "strict").strip().lower()
 if COOKIE_SAMESITE not in ("strict", "lax", "none"):
     COOKIE_SAMESITE = "strict"
+PUBLIC_HOST = os.environ.get("QTTS_PUBLIC_HOST", "").strip().lower()
 ACCESS_TOKEN = os.environ.get("QTTS_ACCESS_TOKEN", "")
 LLM_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 LLM_BASE = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com")).rstrip("/")
@@ -135,7 +136,13 @@ def same_origin(request: Request, required: bool = False) -> bool:
         return False
     if parsed.scheme not in ("http", "https") or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path:
         return False
-    if parsed.netloc.lower() != request.headers.get("host", "").lower():
+    origin_host = parsed.netloc.lower()
+    request_host = request.headers.get("host", "").lower()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",", 1)[0].strip().lower()
+    allowed_hosts = {request_host, forwarded_host}
+    if PUBLIC_HOST:
+        allowed_hosts.add(PUBLIC_HOST)
+    if origin_host not in allowed_hosts:
         return False
     if parsed.scheme == "https":
         return True

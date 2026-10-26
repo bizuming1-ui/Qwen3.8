@@ -22,6 +22,11 @@ export QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP="${QTTS_AUTOENTRY_ALLOW_LOOPBACK_HTTP:
 # The preview is embedded on a different top-level origin. Keep the session
 # HttpOnly, but allow its Secure cookie in that iframe; production stays Strict.
 export QTTS_AUTOENTRY_SAMESITE="${QTTS_AUTOENTRY_SAMESITE:-none}"
+if [[ -n "${E2B_SANDBOX_ID:-}" ]]; then
+  # The proxy may forward a loopback Host while retaining the public Origin.
+  # Pin the exact preview host instead of accepting arbitrary cross-origin hosts.
+  export QTTS_PUBLIC_HOST="${QTTS_PUBLIC_HOST:-${QTTS_GATEWAY_PORT}-${E2B_SANDBOX_ID}.e2b.app}"
+fi
 export PYTHONUNBUFFERED=1
 
 mkdir -p "$QTTS_STATE"

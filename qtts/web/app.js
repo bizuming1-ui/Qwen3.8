@@ -434,12 +434,23 @@ registerProcessor('qtts-ring', QttsRing);
     C = (path) => path;
   let accessToken = "",
     accessEpoch = 0,
-    accessController = new AbortController();
+    accessController = new AbortController(),
+    automaticReloads = 0;
+  function clearAutomaticRetry() {
+    automaticReloads = 0;
+    try { sessionStorage.removeItem("qtts-auto-entry-retry"); } catch {}
+  }
   function reloadAutomaticEntry() {
+    let previous = 0;
     try {
-      if (sessionStorage.getItem("qtts-auto-entry-retry") === "1") return false;
-      sessionStorage.setItem("qtts-auto-entry-retry", "1");
-    } catch { /* storage may be disabled; still make one navigation attempt */ }
+      previous = Number(sessionStorage.getItem("qtts-auto-entry-retry") || 0);
+      if (!Number.isFinite(previous) || previous < 0) previous = 0;
+    } catch {}
+    // A broken proxy/session must not cause an unlimited reload loop. The
+    // automatic locked page offers a passwordless manual retry after two tries.
+    if (automaticReloads >= 2 || previous >= 2) return false;
+    automaticReloads++;
+    try { sessionStorage.setItem("qtts-auto-entry-retry", String(previous + 1)); } catch {}
     try {
       location.reload();
       return true;
@@ -631,20 +642,18 @@ registerProcessor('qtts-ring', QttsRing);
           body: JSON.stringify({grant}), credentials: "same-origin",
           cache: "no-store", redirect: "error", referrerPolicy: "no-referrer", signal: accessController.signal,
         });
-        if (!response.ok) throw new Error("私有入口已失效或已使用，请从 Notebook 获取新入口");
+        if (!response.ok) throw new Error("私密入口交换失败（HTTP " + response.status + "）");
       }
       const response = await fetch("/api/session/status", {
         credentials: "same-origin", redirect: "error", cache: "no-store",
         referrerPolicy: "no-referrer", signal: accessController.signal,
       });
-      if (!response.ok) throw new Error("请从 Notebook 打开私有入口，无需输入口令");
+      if (!response.ok) throw new Error("私密会话检查失败（HTTP " + response.status + "）");
       if (epoch !== accessEpoch) return;
       accessToken = "@private-cookie";
       document.body.classList.add("automatic-entry");
-      try {
-        sessionStorage.setItem("qtts-auto-entry", "1");
-        sessionStorage.removeItem("qtts-auto-entry-retry");
-      } catch {}
+      try { sessionStorage.setItem("qtts-auto-entry", "1"); } catch {}
+      clearAutomaticRetry();
       if (!(await O())) throw new Error("网关暂不可用，请稍后从 Notebook 重新打开");
       if (epoch !== accessEpoch) return;
       document.body.classList.add("is-unlocked");
@@ -661,12 +670,16 @@ registerProcessor('qtts-ring', QttsRing);
         r("access-status").textContent = "正在重新获取自动私密入口，无需输入口令…";
         return;
       }
-      lockAccess(error.name === "AbortError" ? "连接已停止" : "自动连接未完成；请刷新页面获取新入口，不要重启模型");
+      lockAccess(error.name === "AbortError" ? "连接已停止" : "自动连接未完成（" + error.message + "）；点击“重新自动连接”，无需口令，不要重启模型");
     }
   }
   function endPrivateSession() {
     // In the simulator, revoking a session must not strand the user at a password form.
-    const automatic = accessToken === "@private-cookie";
+    // The class/session marker survives lockAccess(), which intentionally clears accessToken.
+    let automatic = accessToken === "@private-cookie" || document.body.classList.contains("automatic-entry");
+    try {
+      automatic = automatic || sessionStorage.getItem("qtts-auto-entry") === "1" || new URLSearchParams(location.hash.slice(1)).has("qtts-entry");
+    } catch {}
     lockAccess(automatic ? "正在重新自动连接，无需输入口令…" : "已停止并退出；重新使用请从 Notebook 打开新入口");
     return fetch("/api/session/logout", {
       method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
@@ -676,7 +689,10 @@ registerProcessor('qtts-ring', QttsRing);
     }).catch(() => {
       if (!automatic) r("access-status").textContent = "本页已停止；服务端退出未确认，请清除此站点Cookie或稍后重试退出";
     }).finally(() => {
-      if (automatic) location.reload();
+      if (automatic) {
+        clearAutomaticRetry();
+        location.reload();
+      }
     });
   }
 
@@ -2089,6 +2105,10 @@ registerProcessor('qtts-ring', QttsRing);
     } catch {}
     ((r("dskey").value = ""), (r("baseurl").value = location.origin));
     r("access-form").addEventListener("submit", unlockAccess);
+    r("btn-auto-retry").addEventListener("click", () => {
+      clearAutomaticRetry();
+      location.reload();
+    });
     r("btn-lock").addEventListener("click", () => endPrivateSession());
     r("btn-reference-options").addEventListener("click", () => {
       const options = r("reference-options");
