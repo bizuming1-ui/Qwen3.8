@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "source_notebook": "kaggle/working/voice_cloning.ipynb",
-  "source_notebook_sha256": "82f8900aadccc0fd232ea884f736123d50fe2fcd0a1787c1d5a674c54ab40cab",
+  "source_notebook_sha256": "e78010aea19bcc132a2acd96431fd6cfa840ea53e8dbf8689db9a9fe777871c0",
   "asset_count": 74,
   "assets": {
     "LICENSE-QWEN-DERIVED.txt": {
@@ -285,16 +285,16 @@
       "sha256": "43de4bea8040ee09e88961d7f9997ea3274b39cc82c09421b291b731a22f9f3f"
     },
     "web/app.js": {
-      "bytes": 98667,
-      "sha256": "0492b19e18642a876a39b37d7cc3a31fdfe6620f6d36183bd41d84032be2e2b5"
+      "bytes": 100614,
+      "sha256": "74deb33961fc88faa9f2aa06e7f1df1d3b61ce08e2e051ad2129083c077fe715"
     },
     "web/diagnostic-trace.js": {
       "bytes": 6149,
       "sha256": "df963b291c26e1f31a7c1513b98b6a3c142f68c18e31bb71f305590d537f9aab"
     },
     "web/index.html": {
-      "bytes": 30748,
-      "sha256": "cd441fa0f644bef5f292f8102228942f46a21ed5f09cc73e0075fe23f7f0613d"
+      "bytes": 31024,
+      "sha256": "78c7f1e32f31e4af941749d65946cfadda32571e4a406d269511f0e7dda7fd50"
     },
     "web/recorder.js": {
       "bytes": 12054,

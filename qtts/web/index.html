@@ -97,8 +97,9 @@ dialog{width:min(1040px,calc(100vw - 24px));max-height:calc(100dvh - 24px);paddi
         <div class="scroll" tabindex="0" role="region" aria-label="参考采集配置">
           <div class="grid"><div><label for="pname">声音名称（可留空）</label><input id="pname" maxlength="128" placeholder="留空则使用“我的声音”"></div><div><label for="plang">参考语言</label><select id="plang"><option value="auto">自动识别</option><option>Chinese</option><option>English</option><option>Japanese</option><option>Korean</option></select></div></div>
           <section id="simple-training" class="card" aria-labelledby="simple-training-title">
-            <div class="panel-title"><h3 id="simple-training-title">一键真实训练 · CPU＋双T4</h3><button id="btn-copy-kaggle" type="button" class="sm">复制完整 Kaggle</button></div>
+            <div class="panel-title"><h3 id="simple-training-title">一键真实训练 · CPU＋双T4</h3><button id="btn-copy-kaggle" type="button" class="sm">复制完整 Kaggle 代码</button></div>
             <p class="hint">只需录制或上传参考语音，再点击“开始训练”。系统自动转写并显示完整全文；内部训练窗口不需要你手工分段。训练期间会安全暂停推理，完成后恢复并加载训练声音。</p>
+            <p class="hint">“复制完整 Kaggle 代码”会复制一个完整 Python 单元格；粘贴到 Kaggle 后整格运行，无需手动拼接其他源码文件。若浏览器拦截剪贴板，会提供同内容的 .py 下载，不会伪报已复制。</p>
             <p class="hint">点击开始即确认：你拥有声音训练使用权，且录音来自同一位说话人。自动转写不是人工校对；MOCK不会伪造训练成功，真实执行请在Kaggle双T4环境验证。</p>
             <div class="actions"><button id="btn-start-training" class="primary" type="button">开始真实训练</button><button id="btn-training-preflight" type="button">检查训练环境</button></div>
             <div class="bar" aria-label="真实训练进度"><div id="simple-training-bar"></div></div>

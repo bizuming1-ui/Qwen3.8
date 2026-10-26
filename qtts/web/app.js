@@ -484,6 +484,7 @@ registerProcessor('qtts-ring', QttsRing);
     simpleTrainingFailures = 0;
     r("full-ref-text").value = "";
     r("simple-training-receipt").textContent = "";
+    clearKaggleFallback();
     r("simple-training-status").textContent = "已退出；训练任务状态已从此页面清除。";
     r("simple-training-bar").style.width = "0";
     r("btn-start-training").disabled = false;
@@ -2003,7 +2004,46 @@ registerProcessor('qtts-ring', QttsRing);
     }));
   }
 
-  let simpleTrainingTimer = 0, simpleTrainingJob = "", simpleTrainingFailures = 0;
+  let simpleTrainingTimer = 0, simpleTrainingJob = "", simpleTrainingFailures = 0, kaggleFallbackUrl = "";
+  function clearKaggleFallback() {
+    const url = kaggleFallbackUrl;
+    kaggleFallbackUrl = "";
+    if (url) try { URL.revokeObjectURL(url); } catch {}
+    document.getElementById("kaggle-copy-download")?.remove();
+  }
+  function legacyCopyText(text) {
+    const area = o("textarea", {readonly: "readonly"});
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.left = "-10000px";
+    area.style.top = "0";
+    area.style.opacity = "0";
+    try {
+      document.body.append(area);
+      area.focus();
+      area.select();
+      area.setSelectionRange(0, area.value.length);
+      return Boolean(document.execCommand("copy"));
+    } finally {
+      area.remove();
+    }
+  }
+  function offerKaggleDownload(source, error) {
+    clearKaggleFallback();
+    const status = r("simple-training-status");
+    const reason = error?.message ? "（" + error.message + "）" : "";
+    status.textContent = "浏览器未允许自动复制" + reason + "。没有伪报复制成功；请允许剪贴板权限后重试，或下载同一份完整 Python 单元格：";
+    try {
+      const url = URL.createObjectURL(new Blob([source], {type: "text/x-python;charset=utf-8"}));
+      kaggleFallbackUrl = url;
+      const link = o("a", {id: "kaggle-copy-download", href: url, download: "voice_cloning.py"}, "下载完整 Kaggle .py");
+      link.style.display = "inline-block";
+      link.style.marginTop = "6px";
+      status.append(document.createElement("br"), link);
+    } catch (downloadError) {
+      status.textContent += " 下载也不可用：" + (downloadError?.message || "未知错误") + "；请允许剪贴板权限后重试。";
+    }
+  }
   function simpleTrainingFiles() { return [...(r("files").files || []), ..._]; }
   function renderSimpleTraining(job) {
     if (!job) return;
@@ -2127,18 +2167,35 @@ registerProcessor('qtts-ring', QttsRing);
       r("simple-training-status").textContent = "完整Kaggle源码尚未加载；请刷新页面后再复制。";
       return;
     }
+    const button = r("btn-copy-kaggle");
+    button.disabled = true;
+    let copied = false;
+    let lastError = null;
     try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(source);
-      else {
-        const area = o("textarea", {readonly: "readonly"});
-        area.value = source; area.style.position = "fixed"; area.style.opacity = "0";
-        document.body.append(area); area.select();
-        const copied = document.execCommand("copy"); area.remove();
-        if (!copied) throw new Error("browser copy command rejected");
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(source);
+          copied = true;
+        } catch (error) {
+          // Arena may deny clipboard-write in an iframe; try the DOM path too.
+          lastError = error;
+        }
       }
-      r("simple-training-status").textContent = `已复制完整Kaggle启动代码（${source.length}字符）。粘贴到一个Python单元格并运行；真实训练需双T4。`;
-    } catch (error) {
-      r("simple-training-status").textContent = "浏览器未允许自动复制：" + error.message + "；请允许剪贴板权限后重试。";
+      if (!copied) {
+        try {
+          copied = legacyCopyText(source);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (copied) {
+        clearKaggleFallback();
+        r("simple-training-status").textContent = `已复制完整 Kaggle Python 单元格（${source.length}字符）。粘贴到 Kaggle 的一个 Python 单元格，整格运行即可；无需手动拼接其他源码文件。真实训练仍需双T4。`;
+      } else {
+        offerKaggleDownload(source, lastError || new Error("browser copy command rejected"));
+      }
+    } finally {
+      button.disabled = false;
     }
   }
   async function resumeSimpleTraining() {
