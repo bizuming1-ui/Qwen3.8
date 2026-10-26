@@ -1,6 +1,8 @@
 /** main.js — 应用装配 */
 import { $, $$, el, toast, fmtClock, fmtBytes, clamp, sleep } from './util.js';
-import { SPEAKERS, NOTEBOOK_CELLS } from './data.js';
+import { SPEAKERS, NOTEBOOK_CELLS, DEMO_CELLS, KAGGLE_CELLS, KAGGLE_SOURCE } from './data.js';
+import { parseNotebookText, cellsToIpynb, summarize } from './ipynb.js';
+import { downloadBlob } from './util.js';
 import { FakeKernel } from './kernel.js';
 import { Notebook } from './notebook.js';
 import { Studio } from './studio.js';
@@ -27,6 +29,8 @@ const DEFAULTS = {
   ],
   runs: [],
   modelEpoch: 20,
+  notebookName: 'voice-clone-lab.ipynb',
+  notebookSource: KAGGLE_CELLS && KAGGLE_CELLS.length ? KAGGLE_SOURCE : null,
   ram: 3.1,
   disk: 4.2,
 };
@@ -37,6 +41,9 @@ const app = {
 
   async init() {
     this.state = this.load();
+    if (this.state.notebookSource && this.state.notebookSource.name) {
+      this.state.notebookName = this.state.notebookSource.name.split('/').pop();
+    }
 
     // 实例
     this.kernel = new FakeKernel(this);
@@ -59,6 +66,7 @@ const app = {
     $('#internetCheck').checked = this.state.internet;
     $('#accelerator').value = this.state.accelerator;
     this.updateEnvLine();
+    this.renderSource();
   },
 
   load() {
@@ -73,6 +81,9 @@ const app = {
       })).filter((c) => c.type);
       // 上传的音频不能序列化，过滤掉无法重建的
       merged.uploadedSpeakers = (merged.uploadedSpeakers || []).filter((s) => Array.isArray(s.embedding));
+      if (!merged.cells || !merged.cells.length) {
+        merged.cells = structuredClone(DEFAULTS.cells);
+      }
       return merged;
     } catch {
       return structuredClone(DEFAULTS);
@@ -229,6 +240,47 @@ const app = {
     });
 
     $('#clearBtn').addEventListener('click', () => this.notebook.clearOutputs());
+
+    // ── 导入真实 Kaggle 代码（.ipynb / .py）──
+    $('#ipynbUpload').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const { cells, meta } = parseNotebookText(text, file.name);
+        if (!cells.length) { toast('文件里没有解析到单元格', 'warn'); return; }
+        this.applyCells(cells, { name: file.name, importedAt: new Date().toISOString(), meta });
+        const st = summarize(cells);
+        toast(`已导入 ${file.name} · ${st.code} 个代码单元格 / ${st.lines} 行`, 'ok');
+      } catch (err) {
+        toast('导入失败：' + err.message, 'err');
+      } finally {
+        e.target.value = '';
+      }
+    });
+
+    // ── 导出当前 notebook 为 .ipynb ──
+    $('#exportBtn').addEventListener('click', () => {
+      const nb = cellsToIpynb(this.state.cells, { name: this.state.notebookName });
+      downloadBlob(new Blob([nb], { type: 'application/json' }), (this.state.notebookName || 'notebook').replace(/\.ipynb$/, '') + '.ipynb');
+      toast('已导出 .ipynb（可直接放回 Kaggle）', 'ok');
+    });
+
+    // ── 载入项目里 kaggle/ 的真实代码 ──
+    $('#reloadKaggleBtn').addEventListener('click', () => {
+      if (!KAGGLE_CELLS || !KAGGLE_CELLS.length) {
+        toast('kaggle/ 里还没有代码：把文件放进去并运行 npm run import:kaggle', 'warn');
+        return;
+      }
+      this.applyCells(KAGGLE_CELLS, KAGGLE_SOURCE || { name: 'kaggle/' });
+      toast(`已载入 kaggle/ 代码 · ${KAGGLE_CELLS.length} 个单元格`, 'ok');
+    });
+
+    // ── 恢复示例 notebook ──
+    $('#resetNbBtn').addEventListener('click', () => {
+      this.applyCells(DEMO_CELLS, null);
+      toast('已恢复示例 notebook', 'ok');
+    });
     $$('[data-add]').forEach((b) => b.addEventListener('click', () => this.notebook.addCell(b.dataset.add)));
     $('#addCellBottom').addEventListener('click', () => this.notebook.addCell('code'));
 
@@ -239,6 +291,41 @@ const app = {
         this.notebook.runAll();
       }
     });
+  },
+
+  /** 用一份单元格列表替换 notebook（重置执行状态） */
+  applyCells(cells, source) {
+    this.state.cells = cells.map((c) => ({
+      id: 'c' + Math.random().toString(36).slice(2, 9),
+      type: c.type === 'md' ? 'md' : 'code',
+      source: String(c.source || ''),
+      count: undefined,
+      tookMs: null,
+    }));
+    this.state.notebookSource = source || null;
+    this.state.notebookName = (source && source.name ? source.name.split('/').pop() : 'voice-clone-lab.ipynb');
+    this.notebook.execCounter = 0;
+    this.notebook.busy = false;
+    this.notebook.render();
+    this.renderSource();
+    this.save();
+    this.markSaved();
+  },
+
+  renderSource() {
+    const badge = document.getElementById('nbSourceBadge');
+    const nameEl = document.getElementById('nbFileName');
+    const src = this.state.notebookSource;
+    if (nameEl) nameEl.textContent = this.state.notebookName || 'voice-clone-lab.ipynb';
+    if (!badge) return;
+    if (src && (src.name || src.importedAt)) {
+      badge.hidden = false;
+      const codeCells = (src.meta && src.meta.codeCells) || this.state.cells.filter((c) => c.type === 'code').length;
+      badge.textContent = `真实代码 · ${codeCells} code cells`;
+      badge.title = `${src.name || ''}${src.importedAt ? '\n导入于 ' + new Date(src.importedAt).toLocaleString('zh-CN') : ''}`;
+    } else {
+      badge.hidden = true;
+    }
   },
 
   updateEnvLine() {

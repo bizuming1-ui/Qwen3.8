@@ -7,8 +7,15 @@
   "scripts": {
     "dev": "node server.cjs 5173",
     "start": "node server.cjs 5173",
-    "gen:samples": "node scripts/gen-samples.mjs"
+    "gen:samples": "node scripts/gen-samples.mjs",
+    "import:kaggle": "node scripts/import-kaggle.mjs"
   },
-  "keywords": ["kaggle", "simulator", "voice-clone", "tts", "web-audio"],
+  "keywords": [
+    "kaggle",
+    "simulator",
+    "voice-clone",
+    "tts",
+    "web-audio"
+  ],
   "license": "MIT"
 }

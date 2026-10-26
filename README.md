@@ -62,6 +62,53 @@
 
 ---
 
+## 📥 把你的真实 Kaggle 代码放进项目
+
+不想只在「模拟器」里改，而是想让**真正在 Kaggle 跑的那份 notebook** 成为项目的一部分：
+
+```bash
+# 1. 把文件放进 kaggle/（或任意位置）
+cp ~/Downloads/my_voice_clone.ipynb kaggle/
+
+# 2. 一条命令导入：解析 → 生成 src/kaggle-code.js
+npm run import:kaggle -- kaggle/my_voice_clone.ipynb
+```
+
+导入后：
+
+- `kaggle/my_voice_clone.ipynb` —— 原始文件，**完整保留、进 Git**，永远不丢
+- `src/kaggle-code.js` —— 自动生成的单元格数据（含导入时间、来源、统计）
+- 刷新页面，Notebook 默认就加载你的真实代码，标题旁出现 `真实代码 · N code cells` 徽标
+
+也可以完全在界面里操作：
+
+| 按钮 | 作用 |
+|---|---|
+| **⬆ Import .ipynb**（Notebook 右上） | 选 `.ipynb` / `.py` / `.txt`，直接替换当前 notebook 并本地保存 |
+| **⤓ Export** | 把当前 notebook 导出成标准 `.ipynb`，可直接拖回 Kaggle 运行 |
+| **↺ 载入 Kaggle 代码**（侧栏） | 重新从 `kaggle/` 加载真实代码 |
+| **↺ 载入示例 notebook**（侧栏） | 回到内置的示例流程 |
+
+格式支持：`.ipynb`（JSON cells）、`.py`（按 `# %%` / `# In[ ]` 分节）、`.txt`/`.md`（整段）。
+
+### 真实代码怎么"跑"？
+
+`src/minipy.js` 是个极简 Python 语义模拟器：维护变量表、求值 `print(...)`（含 f-string）、
+内置 `torch` / `numpy` / `os` / `librosa` / `soundfile` 桩（`torch.cuda.is_available()` 会真的按你选的 Accelerator 返回），
+并把 Python 三元表达式、`and/or/not`、`True/False/None` 翻译成 JS 再求值。
+
+所以像这样的代码能给出像样的输出：
+
+```python
+import torch
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"using device: {device}")     # → using device: cuda
+print(len(os.listdir(DATA)))         # → 真实目录结构里的条目数
+```
+
+它**不会真的执行你的 Python**（浏览器里没有 Python），也不会运行 `def`/`for` 的函数体；
+`nvidia-smi`、`pip install`、训练循环、`synthesize()` 这些则由模拟内核专门接管。
+
 ## 🚀 使用
 
 ```bash

@@ -101,6 +101,8 @@
         <div class="side-actions">
           <button class="btn btn-ghost" id="restartBtn">↻ Restart kernel</button>
           <button class="btn btn-ghost" id="clearBtn">␡ Clear outputs</button>
+          <button class="btn btn-ghost" id="reloadKaggleBtn" title="载入项目里的 kaggle/ 真实代码">↺ 载入 Kaggle 代码</button>
+          <button class="btn btn-ghost" id="resetNbBtn" title="恢复内置示例 notebook">↺ 载入示例 notebook</button>
         </div>
       </div>
     </aside>
@@ -112,12 +114,16 @@
       <section class="view is-active" id="view-notebook">
         <div class="nb-head">
           <div>
-            <h1 class="nb-title">voice-clone-lab.ipynb <span class="badge badge-blue">Draft</span></h1>
+            <h1 class="nb-title"><span id="nbFileName">voice-clone-lab.ipynb</span> <span class="badge badge-blue">Draft</span> <span class="badge badge-violet" id="nbSourceBadge" hidden></span></h1>
             <p class="nb-meta">Zero-shot Voice Cloning · 零样本声音克隆实验 · <span id="nbCellCount">0</span> cells · 预计 <span id="nbEta">42s</span></p>
           </div>
           <div class="nb-tools">
             <button class="btn btn-ghost sm" data-add="code">+ Code</button>
             <button class="btn btn-ghost sm" data-add="md">+ Markdown</button>
+            <span class="divider-v"></span>
+            <label class="btn btn-ghost sm" for="ipynbUpload" title="导入真实 Kaggle 代码（.ipynb / .py）">⬆ Import .ipynb</label>
+            <input type="file" id="ipynbUpload" accept=".ipynb,.py,.txt,.md,application/json" hidden />
+            <button class="btn btn-ghost sm" id="exportBtn" title="导出为 .ipynb">⤓ Export</button>
             <span class="divider-v"></span>
             <span class="save-hint" id="saveHint">已保存到本地</span>
           </div>

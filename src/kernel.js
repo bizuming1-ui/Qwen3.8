@@ -6,6 +6,7 @@
 import { ACCELERATORS, SPEAKERS } from './data.js';
 import { synthesizeSpeech, analyzeAudio, SR } from './audio.js';
 import { sleep, fmt, rng, gauss } from './util.js';
+import { runGenericCell } from './minipy.js';
 
 const out = (text, cls = '', cr = false) => ({ type: 'stream', text, cls, cr });
 
@@ -59,7 +60,9 @@ export class FakeKernel {
     if (/^!\s*(ls|pwd|df|du|cat|free|cat )/.test(head)) { yield* this.shell(code); return; }
 
     // ── torch 环境 ──
-    if (/import torch/.test(code) && /torch\.cuda|torch\.backends/.test(code)) { yield* this.torchInfo(); return; }
+    const isPureTorchProbe = /import torch/.test(code) && /torch\.cuda|torch\.backends/.test(code)
+      && !/print\(\s*f["']/.test(code) && !/\bdevice\s*=/.test(code);
+    if (isPureTorchProbe) { yield* this.torchInfo(); return; }
 
     // ── os.walk 数据集 ──
     if (/os\.walk\(/.test(code)) { yield* this.mountData(code); return; }
@@ -76,10 +79,11 @@ export class FakeKernel {
     // ── 推理 ──
     if (/\.synthesize\(/.test(code)) { yield* this.infer(code); return; }
 
-    // ── 只加载音频 / 通用 print ──
-    if (/^\s*print\(/.test(code) || /print\(/.test(code)) { yield* this.genericPrint(code); return; }
+    // ── 下载 / 解压 / 克隆 ──
+    if (/^!\s*(git clone|wget|curl|unzip|cp|mv|rm|mkdir|kaggle datasets)/.test(head)) { yield* this.shell(code); return; }
 
-    yield out('# 单元格执行完成（模拟器未定义该操作）', 'dim');
+    // ── 通用真实代码：交给迷你解释器 ──
+    yield* this.genericCell(code);
   }
 
   /* ══════════════════════ 各单元实现 ══════════════════════ */
@@ -171,6 +175,32 @@ export class FakeKernel {
         yield out('LJ001-0001|Printing, in the only sense with which we are at present concerned...|Printing, in the only sense with which we are at present concerned...', 'dim');
         yield out('LJ001-0002|An objection is not a misrepresentation,...|An objection is not a misrepresentation,...', 'dim');
       } else yield out(`cat: ${f}: No such file or directory`, 'err');
+      return;
+    }
+    if (base === 'git') {
+      const url = parts[parts.length - 1];
+      yield out(`Cloning into '${(url.split('/').pop() || 'repo').replace(/\.git$/, '')}'...`, 'dim');
+      yield out('remote: Enumerating objects: 128, done.', 'dim');
+      yield out('Receiving objects: 100% (128/128), 12.4 MiB | 8.20 MiB/s, done.', '');
+      yield out("Resolving deltas: 100% (42/42), done.", 'dim');
+      return;
+    }
+    if (base === 'wget' || base === 'curl') {
+      const url = parts.find((p) => p.startsWith('http')) || 'https://example.com/model.pth';
+      const name = url.split('/').pop() || 'download';
+      yield out(`--2026-10-26 14:02:33--  ${url}`, 'dim');
+      yield out(`Resolving host... 1.2.3.4`, 'dim');
+      yield out(`Saving to: '${name}'`, '');
+      yield out(`${name}  100%[===================>]  86.4M  22.1MB/s    in 3.9s`, '');
+      this.app.addFile(name, 88473);
+      yield out(`# 已保存到 /kaggle/working/${name}`, 'dim');
+      return;
+    }
+    if (base === 'mkdir') { yield out(''); this.app.addFile(parts[parts.length - 1] + '/', 0); return; }
+    if (base === 'unzip') {
+      yield out(`Archive:  ${parts[parts.length - 1]}`, 'dim');
+      for (let i = 0; i < 4; i++) yield out(`  inflating: data/part_${i}.wav`, '');
+      yield out('  inflating: data/metadata.csv', '');
       return;
     }
     if (base === 'du') {
@@ -367,6 +397,19 @@ export class FakeKernel {
       { k: 'final kl', v: fmt(kl, 4) }, { k: 'checkpoints', v: '4' },
     ] };
     this.app.log('训练完成 · ckpt_e20.pt 已产出', 'ok');
+  }
+
+  /** 真实 Kaggle 代码：交给 minipy 求值，未知语句静默跳过 */
+  async *genericCell(code) {
+    const { lines } = await runGenericCell(code, this.app);
+    if (!lines.length) {
+      yield out('# 该单元格来自真实 notebook · 已执行（无标准输出）', 'dim');
+      return;
+    }
+    for (const l of lines) {
+      yield out(l.text, l.cls || '');
+      await sleep(30);
+    }
   }
 
   async *genericPrint(code) {

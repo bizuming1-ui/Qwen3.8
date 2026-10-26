@@ -1,4 +1,5 @@
 /** data.js — 模拟数据：音色库、数据集、初始 notebook */
+import { KAGGLE_CELLS, KAGGLE_SOURCE } from './kaggle-code.js';
 
 export const SPEAKERS = [
   {
@@ -89,7 +90,7 @@ export const DATASETS = [
   },
 ];
 
-export const NOTEBOOK_CELLS = [
+const DEMO_CELLS = [
   {
     type: 'md',
     source: '## 🎙️ Voice Clone Lab\nZero-shot voice cloning on Kaggle GPU：3 秒参考音频即可克隆音色。\n模型：**VITS** + **HiFi-GAN** · 数据集：LJSpeech-1.1 / VCTK',
@@ -138,3 +139,7 @@ export const ACCELERATORS = {
   tpu: { label: 'TPU VM v3-8', gpus: [], vramTotal: 0, flavor: 'tpu', cuda: '—' },
   cpu: { label: 'CPU only', gpus: [], vramTotal: 0, flavor: 'cpu', cuda: '—' },
 };
+
+/** 若项目里导入过真实 Kaggle 代码，默认就用它，否则用示例 */
+export const NOTEBOOK_CELLS = KAGGLE_CELLS && KAGGLE_CELLS.length ? KAGGLE_CELLS : DEMO_CELLS;
+export { DEMO_CELLS, KAGGLE_CELLS, KAGGLE_SOURCE };
