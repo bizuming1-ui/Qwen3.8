@@ -1070,8 +1070,9 @@ def index_content(request: Request) -> str:
         # No network probe, grant, cookie, or token is needed to unlock the demo UI.
         bootstrap = '<script>window.QTTS_DEMO_OPEN=1;</script>'
         source_version = hashlib.sha256((WEB / "kaggle-source.js").read_bytes()).hexdigest()[:16]
+        app_version = hashlib.sha256((WEB / "app.js").read_bytes()).hexdigest()[:16]
         content = content.replace('<script src="kaggle-source.js"></script>', f'<script src="kaggle-source.js?rev={source_version}"></script>', 1)
-        return content.replace('<script src="app.js"></script>', bootstrap + '<script src="app.js?demo=direct"></script>', 1)
+        return content.replace('<script src="app.js"></script>', bootstrap + f'<script src="app.js?rev={app_version}"></script>', 1)
     if AUTO_OPEN and not valid_cookie(request):
         try:
             grant = new_grant()
@@ -1092,4 +1093,4 @@ async def index(request: Request):
 async def static_asset(asset: str):
     if asset not in ("app.js", "recorder.js", "diagnostic-trace.js", "kaggle-source.js"):
         raise HTTPException(404, "not found")
-    return FileResponse(WEB / asset, headers={"Cache-Control": "no-cache", "Referrer-Policy": "no-referrer"})
+    return FileResponse(WEB / asset, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})

@@ -2172,18 +2172,17 @@ registerProcessor('qtts-ring', QttsRing);
     let copied = false;
     let lastError = null;
     try {
-      if (navigator.clipboard?.writeText) {
+      // Run the synchronous DOM path first: it preserves the click's user
+      // activation and works in iframes where Clipboard API is policy-blocked.
+      try {
+        copied = legacyCopyText(source);
+      } catch (error) {
+        lastError = error;
+      }
+      if (!copied && navigator.clipboard?.writeText) {
         try {
           await navigator.clipboard.writeText(source);
           copied = true;
-        } catch (error) {
-          // Arena may deny clipboard-write in an iframe; try the DOM path too.
-          lastError = error;
-        }
-      }
-      if (!copied) {
-        try {
-          copied = legacyCopyText(source);
         } catch (error) {
           lastError = error;
         }

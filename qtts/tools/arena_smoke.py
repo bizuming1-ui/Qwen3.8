@@ -69,7 +69,7 @@ class Smoke:
         self.demo = response.headers.get("x-qtts-demo") == "1"
         if self.demo:
             self.check("demo index has no private grant", match is None)
-            self.check("demo index selects direct console", "window.QTTS_DEMO_OPEN=1" in response.text and "app.js?demo=direct" in response.text and "kaggle-source.js?rev=" in response.text)
+            self.check("demo index selects direct console", "window.QTTS_DEMO_OPEN=1" in response.text and "app.js?rev=" in response.text and "kaggle-source.js?rev=" in response.text)
             self.check("demo index has no inline access key", "window.location.hash=\"qtts-entry=" not in response.text and "Bearer " not in response.text)
             self.http.headers.update({"X-QTTS-Demo": "1"})
             self.check("demo session needs no cookie or key", self.json("GET", "/api/session/status").get("ready") is True and not self.http.cookies)
