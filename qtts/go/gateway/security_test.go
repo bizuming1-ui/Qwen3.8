@@ -113,6 +113,61 @@ func TestGatewayRoutesProtectEveryAPIAndWhitelistStaticAssets(t *testing.T) {
 		t.Fatal("nil guard is not closed", rr.Code)
 	}
 }
+func TestAutomaticEntryIndexSupportsPasswordlessReentry(t *testing.T) {
+	d := t.TempDir()
+	if err := os.WriteFile(filepath.Join(d, "index.html"), []byte(`<html><script src="app.js"></script></html>`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{cfg: &Config{WebDir: d, StateDir: d, AutoOpen: true}, guard: testGuard(t), metrics: NewMetrics()}
+	h := a.routes()
+	readGrant := func() string {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "https://example.test/", nil)
+		h.ServeHTTP(rr, req)
+		if rr.Code != 200 {
+			t.Fatalf("index status=%d", rr.Code)
+		}
+		const marker = `window.location.hash="qtts-entry=`
+		at := strings.Index(rr.Body.String(), marker)
+		if at < 0 {
+			t.Fatal("automatic grant missing")
+		}
+		rest := rr.Body.String()[at+len(marker):]
+		grant := strings.SplitN(rest, `"`, 2)[0]
+		if !validEntrySecret(grant) {
+			t.Fatal("invalid automatic grant")
+		}
+		return grant
+	}
+	first := readGrant()
+	body := `{"grant":"` + first + `"}`
+	req := httptest.NewRequest("POST", "https://example.test/api/session/exchange", strings.NewReader(body))
+	req.Header.Set("Origin", "https://example.test")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("exchange status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("session cookies=%d", len(cookies))
+	}
+	req = httptest.NewRequest("POST", "https://example.test/api/session/logout", nil)
+	req.Header.Set("Origin", "https://example.test")
+	req.AddCookie(cookies[0])
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("logout status=%d", rr.Code)
+	}
+	second := readGrant()
+	if second == first {
+		t.Fatal("reentry reused a one-use grant")
+	}
+}
+
 func TestJSONKnownAndChunkedBodyBudgetsAndTrailingGarbage(t *testing.T) {
 	g := testGuard(t)
 	g.limits.JSONBytes = 32

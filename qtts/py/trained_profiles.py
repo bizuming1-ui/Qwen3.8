@@ -53,7 +53,8 @@ class TrainedArtifacts:
             check_hash(m['base_model_sha256']);check_hash(m['codes_manifest_sha256']);identifier(m['codes_id'])
             if request['model_sha256']!=m['base_model_sha256'] or request['codes_id']!=m['codes_id'] or request['codes_sha256']!=m['codes_manifest_sha256']:raise ValueError()
             ids=m['sample_ids']
-            if not isinstance(ids,list) or not 2<=len(ids)<=16 or len(set(ids))!=len(ids) or ids!=request['sample_ids']:raise ValueError()
+            minimum_samples=1 if request.get('allow_single_sample') is True else 2
+            if not isinstance(ids,list) or not minimum_samples<=len(ids)<=16 or len(set(ids))!=len(ids) or ids!=request['sample_ids']:raise ValueError()
             if request.get('confirm_data_reviewed') is not True or request.get('ack_experimental_training') is not True:raise ValueError()
             for sid in ids:identifier(sid)
             if type(m['lora_rank']) is not int or not 1<=m['lora_rank']<=32 or type(m['lora_alpha']) not in (int,float) or not math.isfinite(m['lora_alpha']) or not 0<m['lora_alpha']<=128:raise ValueError()
@@ -108,9 +109,15 @@ class TrainedArtifacts:
         return {'run_id':run_id,'adapter_manifest_sha256':record['manifest_sha256'],'base_model_sha256':m['base_model_sha256'],
                 'sample_count':len(m['sample_ids']),'training_execution_recorded':True,'quality_verified':False,'inference_reload_verified':False}
 
-    def publish(self,run_id,pin,name,acknowledged=False):
+    def publish(self,run_id,pin,name,acknowledged=False,*,full_ref_text='',language='Auto',source_profile_id=None):
         if acknowledged is not True:raise UploadRejected('explicit unverified adapter acknowledgement required',400)
-        name=text(name,80,'trained voice name');record=self.inspect(run_id,pin);m=record['manifest']
+        name=text(name,80,'trained voice name')
+        if not isinstance(full_ref_text,str) or len(full_ref_text)>200000 or any(ord(c)<32 and c not in '\n\t' or ord(c)==127 or 0xD800<=ord(c)<=0xDFFF for c in full_ref_text):
+            raise UploadRejected('invalid complete reference transcript',400)
+        if not isinstance(language,str) or len(language)>32:raise UploadRejected('invalid trained voice language',400)
+        if source_profile_id is not None and (not isinstance(source_profile_id,str) or not __import__('re').fullmatch(r'[A-Za-z0-9_-]{1,64}',source_profile_id)):
+            raise UploadRejected('invalid source profile binding',400)
+        record=self.inspect(run_id,pin);m=record['manifest']
         codes=TrainingCodesStore.configured(self.state,UploadLimits.from_env())
         profiles=LibraryStore(self.state/'profiles');pid=uuid.uuid4().hex;temporary=self.state/('.trained-profile-'+pid)
         with codes.lease(m['codes_id'],m['codes_manifest_sha256']) as (directory,meta,rows):
@@ -121,7 +128,9 @@ class TrainedArtifacts:
             wav=codes._read_bytes(directory/reference,codes.limits.file_bytes)
             binding={'run_id':run_id,'manifest_sha256':pin,'base_model_sha256':m['base_model_sha256'],
                      'codes_id':m['codes_id'],'codes_manifest_sha256':m['codes_manifest_sha256']}
-            profile={'id':pid,'name':name,'created':timestamp(),'language':'Auto','anchor':'anchor.wav','ref_text':matching[0]['text'],
+            profile={'id':pid,'name':name,'created':timestamp(),'language':language or 'Auto','anchor':'anchor.wav','ref_text':matching[0]['text'],
+                     'full_ref_text':full_ref_text,'transcript_source':'automatic_asr','transcript_verified':False,
+                     'source_profile_id':source_profile_id,
                      'candidates':[],'breath_files':[],'f0':None,'units_per_sec':4.5,'target_rms_dbfs':-21.,
                      'pause_clause_ms':150,'pause_sentence_ms':320,'pause_para_ms':528,'breath_level_db':-37.,
                      'gen':{'temperature':.8,'top_k':50,'top_p':1.,'repetition_penalty':1.05},BINDING:binding,
@@ -152,4 +161,4 @@ def binding_of(profile):
 
 def guard_profile(profile,supports_trained=False):
     if BINDING in profile and not supports_trained:
-        reject('trained voice requires explicit qwen-adapter-buffered backend; no Base/Mock fallback')
+        reject('trained voice requires explicit hybrid or qwen-adapter-buffered backend; no Base/Mock fallback')

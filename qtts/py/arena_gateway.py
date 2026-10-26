@@ -57,6 +57,7 @@ if os.environ.get("QTTS_WORKER_URLS"):
 else:
     WORKER_URLS = ["http://127.0.0.1:" + port.strip() for port in os.environ.get("QTTS_WORKER_PORTS", "7001,7002").split(",") if port.strip()]
 ANALYST_URL = os.environ.get("QTTS_ANALYST_URL", "http://127.0.0.1:" + os.environ.get("QTTS_ANALYST_PORT", "7010")).rstrip("/")
+TRAINING_URL = os.environ.get("QTTS_TRAINING_URL", "http://127.0.0.1:" + os.environ.get("QTTS_TRAINING_PORT", "7020")).rstrip("/")
 try:
     FIRST_CHUNK_SIZE = int(os.environ.get("QTTS_FIRST_CHUNK_SIZE", "4"))
 except ValueError:
@@ -67,7 +68,11 @@ COOKIE_NAME = "qtts_private_session"
 GRANT_TTL = 600
 SESSION_TTL = 8 * 3600
 MAX_SPEAK_BYTES = 256 * 1024
-MAX_PROXY_BYTES = 128 * 1024 * 1024
+try:
+    MAX_PROXY_BYTES = int(os.environ.get("QTTS_MAX_UPLOAD_BYTES", str(128 * 1024 * 1024)))
+except ValueError:
+    MAX_PROXY_BYTES = 128 * 1024 * 1024
+MAX_PROXY_BYTES = max(1024, min(MAX_PROXY_BYTES, 512 * 1024 * 1024))
 SESSION_ID = re.compile(r"^[0-9a-f]{12,64}$")
 ENTRY_SECRET = re.compile(r"^[A-Za-z0-9_-]{43}$")
 DEFAULT_SYSTEM = """你是一个诚实、友善的语音对话助手。
@@ -466,6 +471,29 @@ async def analyst_proxy(path: str, request: Request):
     return Response(response.content, response.status_code, response_headers)
 
 
+@app.api_route("/api/training/{path:path}", methods=["GET", "POST", "DELETE", "PUT", "PATCH"], dependencies=[Depends(require_auth)])
+async def training_proxy(path: str, request: Request):
+    """Proxy only the fixed local training service; never forward browser credentials."""
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_PROXY_BYTES:
+        raise HTTPException(413, "upload exceeds configured request limit")
+    body = await bounded_body(request, MAX_PROXY_BYTES)
+    headers = {}
+    for name in ("content-type", "accept"):
+        if name in request.headers:
+            headers[name] = request.headers[name]
+    try:
+        response = await HTTP.request(request.method, TRAINING_URL + "/" + path,
+                                      params=request.query_params, content=body, headers=headers, timeout=900)
+    except Exception:
+        raise HTTPException(502, "training service unavailable or request interrupted")
+    response_headers = {}
+    for name in ("content-type", "cache-control", "content-disposition", "x-content-type-options"):
+        if name in response.headers:
+            response_headers[name] = response.headers[name]
+    return Response(response.content, response.status_code, response_headers)
+
+
 DIAGNOSTIC_FIELDS = set("""request_mode content_source source_build_id source_build_match source_build_attested acoustic_text_verified
 session id segment segments chars audio_s wall_s overall_rtf_x timeline_ms per_gpu client diagnostic_segments diagnostic_segments_total diagnostic_segments_truncated
 gpu gpu0 gpu1 gen_s gen_ms rtf rtf_x first_chunk_ms model_first_chunk_ms first_chunk_ms_mean gain_db_mean gain_db dsp_ms max_gain_db seed speech_samples chunks chunk_size queue_ms lock_wait_ms profile_prepare_ms worker_wall_ms queue_wait_ms dispatch_queue_ms worker_roundtrip_ms attempts lead_ms model_stages prepare_ms token_decode_ms codec_window_frames reference_codes_decoded prefill_ms decode_ms first_decode_ms codec_ms model_ms quality_verified reference_pcm_splicing extra_breath_requested extra_breath_available output_target_dbfs voice_binding cancelled failed
@@ -493,7 +521,7 @@ def diagnostic_clean(value, key: str = "", depth: int = 0):
             return value
         if key == "content_source" and value in ("user_text", "llm_output"):
             return value
-        if key == "engine" and value in ("mock", "faster-qwen3-tts", "qwen-adapter-buffered"):
+        if key == "engine" and value in ("mock", "faster-qwen3-tts", "qwen-adapter-buffered", "hybrid"):
             return value
         if key == "dtype" and value in ("mock", "fp16", "bf16", "fp32"):
             return value
@@ -505,7 +533,7 @@ def diagnostic_clean(value, key: str = "", depth: int = 0):
             return value
         if key == "voice_conditioning" and value in ("mock", "trained-speaker-vector", "speaker-vector-only", "icl-generated-only-codec"):
             return value
-        if key == "model_output_mode" and value == "sentence-buffered":
+        if key == "model_output_mode" and value in ("sentence-buffered", "acoustic-streaming", "profile-dependent"):
             return value
         if key == "event" and value in ("request", "headers", "pcm", "text_delta", "segment_received", "stats", "network_end", "worklet_first_consumed", "playback_drained", "cancelled_event", "superseded_event", "interrupted_event", "error_event"):
             return value
@@ -1033,6 +1061,6 @@ async def index(request: Request):
 
 @app.get("/{asset}", include_in_schema=False)
 async def static_asset(asset: str):
-    if asset not in ("app.js", "recorder.js", "diagnostic-trace.js"):
+    if asset not in ("app.js", "recorder.js", "diagnostic-trace.js", "kaggle-source.js"):
         raise HTTPException(404, "not found")
     return FileResponse(WEB / asset, headers={"Cache-Control": "no-cache", "Referrer-Policy": "no-referrer"})

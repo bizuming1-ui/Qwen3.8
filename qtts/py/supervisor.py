@@ -23,6 +23,7 @@ from qtts_common import ANALYST_PORT, GATEWAY_PORT, LOG_DIR, MOCK, ROOT, STATE, 
 from access_control import ensure_access_token, gateway_headers, auth_directory
 from gpu_ownership import GpuLease, FD_ENV, NONCE_ENV
 from resource_limits import UploadRejected
+from training_control import read_request as read_training_request, acknowledge as acknowledge_training
 
 log = get_logger("supervisor")
 PY = sys.executable
@@ -111,8 +112,13 @@ def build_procs() -> list[Proc]:
     last_gpu = str(max(N_WORKERS - 1, 0))
     procs.append(Proc("analyst", [PY, str(ROOT / "py" / "analyst.py")], {**base_env, "CUDA_VISIBLE_DEVICES": last_gpu},
                       f"http://127.0.0.1:{ANALYST_PORT}/health"))
+    training_port = int(os.environ.get("QTTS_TRAINING_PORT", "7020"))
+    procs.append(Proc("training", [PY, "-m", "uvicorn", "training_service:app", "--app-dir", str(ROOT / "py"),
+                                   "--host", "127.0.0.1", "--port", str(training_port), "--log-level", "warning"],
+                      {**base_env, "QTTS_TRAINING_PORT": str(training_port)},
+                      f"http://127.0.0.1:{training_port}/health"))
     gw = ROOT / "go" / "gateway" / "gateway"
-    procs.append(Proc("gateway", [str(gw)], {**base_env, "QTTS_WEB": str(ROOT / "web"), "QTTS_BIND": "127.0.0.1"},
+    procs.append(Proc("gateway", [str(gw)], {**base_env, "QTTS_WEB": str(ROOT / "web"), "QTTS_BIND": "127.0.0.1", "QTTS_AUTO_OPEN": "1"},
                       f"http://127.0.0.1:{GATEWAY_PORT}/api/health"))
     return procs
 
@@ -130,12 +136,92 @@ def arm_active_profile(port: int):
         log.warning("could not re-arm profile on :%d: %s", port, e)
 
 
-def watch(procs: list[Proc]):
+def _training_gpu_children(procs):
+    return [pr for pr in procs if pr.name == "analyst" or pr.name.startswith("worker")]
+
+
+def _wait_inference_idle(procs, seconds=30):
+    """Do not cut off an active synthesis unless it cannot become idle promptly."""
+    deadline = time.monotonic() + seconds
+    for pr in _training_gpu_children(procs):
+        if pr.p is None:
+            continue
+        while time.monotonic() < deadline:
+            try:
+                health = http_json(pr.health_url, timeout=1.5) if pr.health_url else {}
+                if not health.get("busy"):
+                    break
+            except Exception:
+                break
+            time.sleep(.25)
+
+
+def handle_training_control(procs, runtime):
+    """Serialize the only supported GPU mode change inside the supervisor."""
+    request = read_training_request(STATE)
+    if request is None or request.get("nonce") == runtime.get("handled_nonce"):
+        return
+    runtime["handled_nonce"] = request["nonce"]
+    job, nonce, action = request["job"], request["nonce"], request["action"]
+    try:
+        if action == "pause":
+            if runtime.get("paused"):
+                if runtime.get("job") != job:
+                    acknowledge_training(STATE, job, nonce, "error", error="another training job owns the GPU handoff", retryable=True)
+                    return
+            else:
+                _wait_inference_idle(procs)
+                for pr in _training_gpu_children(procs):
+                    pr.kill()
+                if runtime.get("lease") is not None:
+                    runtime["lease"].close()
+                    runtime["lease"] = None
+                runtime.update(paused=True, job=job)
+            acknowledge_training(STATE, job, nonce, "paused", inference_paused=True)
+            log.info("inference paused for training job %s", job)
+            return
+        if action == "resume":
+            if not runtime.get("paused"):
+                acknowledge_training(STATE, job, nonce, "resumed", inference_paused=False)
+                return
+            if runtime.get("job") != job:
+                acknowledge_training(STATE, job, nonce, "error", error="training handoff owner mismatch", retryable=False)
+                return
+            # This acquire fails closed if a trainer still owns the fleet.
+            lease = GpuLease.acquire("inference")
+            runtime["lease"] = lease
+            try:
+                for pr in _training_gpu_children(procs):
+                    pr.resource_lease = lease
+                    pr.gave_up = False
+                    pr.start()
+            except BaseException:
+                for pr in _training_gpu_children(procs):
+                    pr.kill()
+                lease.close()
+                runtime["lease"] = None
+                raise
+            runtime.update(paused=False, job=None)
+            acknowledge_training(STATE, job, nonce, "resumed", inference_paused=False)
+            log.info("inference resumed after training job %s", job)
+            return
+    except Exception as error:
+        log.exception("training control %s failed for %s", action, job)
+        acknowledge_training(STATE, job, nonce, "error", error="GPU handoff failed; no training success inferred", retryable=True,
+                             error_type=type(error).__name__)
+
+
+def watch(procs: list[Proc], runtime=None):
+    if runtime is None:
+        runtime = {"lease": None, "paused": False, "job": None, "handled_nonce": None}
     last_snapshot = time.time()
     last_state_sig = ""
     while not STOP.is_set():
+        handle_training_control(procs, runtime)
         for pr in procs:
             if STOP.is_set():break
+            if runtime.get("paused") and (pr.name == "analyst" or pr.name.startswith("worker")):
+                continue
             if pr.gave_up or pr.p is None:
                 continue
             code = pr.p.poll()
@@ -184,8 +270,13 @@ def main():
     def bye(*_):STOP.set()
     previous={sig:signal.signal(sig,bye) for sig in (signal.SIGTERM,signal.SIGINT)}
     lease=None;procs=[];pid_written=False
+    previous_request = read_training_request(STATE)
+    runtime = {"lease": None, "paused": False, "job": None,
+               # A control file left by an old process is never replayed on boot.
+               "handled_nonce": previous_request.get("nonce") if previous_request else None}
     try:
         lease=None if MOCK else GpuLease.acquire('inference')
+        runtime["lease"] = lease
         # Second real supervisor must fail BEFORE changing this legacy PID file.
         write_json_atomic(STATE/'supervisor.pid',os.getpid());pid_written=True
         os.environ["QTTS_ACCESS_TOKEN"]=ensure_access_token(auth_directory(STATE))
@@ -195,7 +286,7 @@ def main():
             if STOP.is_set():break
             pr.start()
             if STOP.wait(1.0 if pr.name.startswith("worker") else 0.2):break
-        if not STOP.is_set():watch(procs)
+        if not STOP.is_set():watch(procs, runtime)
         return 0
     except UploadRejected as error:
         log.error("GPU ownership admission rejected: %s",error)
@@ -211,7 +302,7 @@ def main():
                     path=STATE/'supervisor.pid'
                     if int(path.read_text().strip())==os.getpid():path.unlink()
                 except (OSError,ValueError):pass
-            if lease is not None:lease.close()
+            if runtime.get("lease") is not None:runtime["lease"].close()
             for sig,handler in previous.items():signal.signal(sig,handler)
         log.info("supervisor stopped")
 

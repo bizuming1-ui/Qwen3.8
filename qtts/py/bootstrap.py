@@ -175,18 +175,44 @@ def build_rust() -> bool:
     return False
 
 
+def materialize_base():
+    """Download once, then use a regular-file, pinned Base for training and inference."""
+    from training_job import base_fingerprint
+    from huggingface_hub import snapshot_download
+    base = Path(os.environ.get("QTTS_BASE_MODEL_DIR") or (STATE / "models" / "base")).absolute()
+    token = os.environ.get("HF_TOKEN") or None
+    if not base.is_dir():
+        base.parent.mkdir(parents=True, exist_ok=True)
+        snapshot_download(MODEL, token=token, local_dir=str(base), local_dir_use_symlinks=False,
+                          allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken", "*.jinja", "*.md", ".gitattributes"])
+        # hub's private download metadata is not a model asset and is rejected by
+        # the reviewed fingerprint contract; remove it only in our new directory.
+        shutil.rmtree(base / ".cache", ignore_errors=True)
+    base_hash = base_fingerprint(base)
+    tokenizer_hash = __import__("training_codes", fromlist=["model_fingerprint"]).model_fingerprint(base / "speech_tokenizer")
+    os.environ["QTTS_BASE_MODEL_DIR"] = str(base)
+    os.environ["QTTS_BASE_SHA256"] = base_hash
+    os.environ["QTTS_MODEL"] = str(base)
+    os.environ["QTTS_TOKENIZER_SHA256"] = tokenizer_hash
+    print("   [bg] pinned local Base and CPU tokenizer ready", flush=True)
+    return base, base_hash
+
+
 def preload_models(err: list):
     try:
-        if os.environ.get('QTTS_TTS_ENGINE','faster')=='qwen-adapter-buffered':
-            from training_job import base_fingerprint
-            if base_fingerprint(MODEL)!=os.environ.get('QTTS_BASE_SHA256'):raise RuntimeError('native adapter inference requires a pinned materialized local Base')
-            print('   [bg] pinned local Base reused; no model/ASR/speaker download in trained-only mode',flush=True)
-            return
+        kind = os.environ.get("QTTS_TTS_ENGINE", "faster")
+        needs_base = kind in ("hybrid", "qwen-adapter-buffered") or os.environ.get("QTTS_TRAINING_ENABLED") == "1"
+        if needs_base:
+            materialize_base()
         from huggingface_hub import snapshot_download
         tok = os.environ.get("HF_TOKEN") or None
         t = time.time()
-        snapshot_download(MODEL, token=tok)
-        print(f"   [bg] TTS model ready ({time.time() - t:.0f}s)", flush=True)
+        if not needs_base:
+            snapshot_download(MODEL, token=tok)
+            print(f"   [bg] TTS model ready ({time.time() - t:.0f}s)", flush=True)
+        else:
+            print("   [bg] TTS uses the pinned local Base; no second unversioned model download", flush=True)
+        # ASR and speaker analysis remain available in both legacy and hybrid modes.
         try:
             snapshot_download("Systran/faster-whisper-large-v3", token=tok)
             print("   [bg] Whisper large-v3 ready", flush=True)
@@ -342,7 +368,10 @@ def main() -> int:
 
     with step("2/9 python dependencies"):
         kind=os.environ.get('QTTS_TTS_ENGINE','faster')
-        if kind not in ('faster','qwen-adapter-buffered'):raise RuntimeError('unknown QTTS_TTS_ENGINE')
+        training_enabled=os.environ.get('QTTS_TRAINING_ENABLED','0')=='1'
+        if kind not in ('faster','hybrid','qwen-adapter-buffered'):raise RuntimeError('unknown QTTS_TTS_ENGINE')
+        if training_enabled and kind=='faster':
+            raise RuntimeError('real trained profiles require QTTS_TTS_ENGINE=hybrid (or explicit qwen-adapter-buffered); refusing silent faster-only fallback')
         if kind=='qwen-adapter-buffered':
             if not can_import('qwen_tts') or not can_import('safetensors'):raise RuntimeError('install reviewed qwen-tts/safetensors dependencies before native adapter boot; no automatic backend replacement')
         else:
@@ -351,6 +380,8 @@ def main() -> int:
                 print('   installing reviewed faster/Qwen-HF/Transformers pins; platform Torch/CUDA is not pinned or force-upgraded')
                 install_reviewed_faster()
             if not can_import('faster_qwen3_tts'):raise RuntimeError('reviewed faster backend import failed; no model load')
+            if (kind=='hybrid' or training_enabled) and (not can_import('qwen_tts') or not can_import('safetensors')):
+                raise RuntimeError('hybrid/training requires the reviewed local Qwen and safetensors dependencies; no backend fallback')
         pip("fastapi", "uvicorn", "python-multipart", "soundfile", "librosa", "noisereduce", "requests", "kaggle", "huggingface_hub")
         for mod, pkgs in (("faster_whisper", ["faster-whisper"]), ("speechbrain", ["speechbrain"])):
             if not can_import(mod):
@@ -426,8 +457,9 @@ def main() -> int:
     if entry_url:
         print("  私有入口已生成：请点下方链接，无需输入口令。10分钟有效、一次性使用；不要分享或公开保存输出。")
     print(f"  Gateway base (not the private entry): {url or local}")
-    if os.environ.get('QTTS_TTS_ENGINE','faster')=='qwen-adapter-buffered':
-        print('  训练adapter模式：先用trained_voice.py显式发布，再在现有声音选择器启用；句级缓冲/非声学流式，质量未验收。')
+    if os.environ.get('QTTS_TTS_ENGINE','faster') in ('hybrid','qwen-adapter-buffered'):
+        print('  一键训练：声音实验室 → 录制/上传 → 开始真实训练；CPU编码、双T4 LoRA、adapter加载回执分阶段记录，音色/音质未验收。')
+        print('  旧档案继续使用原流式后端；训练档案使用受控句级缓冲后端，不在切换时静默回退。')
     else:print("  1) 声音实验室: 上传参考音频 → 自动处理 → 启用   2) 语音合成: 打字 → 边生成边播放")
     print("  Monitor: python {}/tools/selftest.py   |   logs: {}".format(ROOT, LOGS))
     print("═" * 70)

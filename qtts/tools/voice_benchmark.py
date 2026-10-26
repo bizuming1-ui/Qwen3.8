@@ -51,7 +51,7 @@ def measure(url, body):
     elapsed = time.perf_counter() - started
     if buf or not isinstance(stats, dict) or stats.get('failed') or stats.get('cancelled'):
         raise RuntimeError('incomplete/failed/cancelled worker stream')
-    if stats.get('engine') not in ('faster-qwen3-tts', 'qwen-adapter-buffered'):
+    if stats.get('engine') not in ('faster-qwen3-tts', 'qwen-adapter-buffered', 'hybrid'):
         raise RuntimeError('Mock/unknown engine cannot prove real RTF')
     if stats.get('voice_binding') != body['voice_binding'] or stats.get('anomalies'):
         raise RuntimeError('reference binding mismatch or generated-audio anomaly')

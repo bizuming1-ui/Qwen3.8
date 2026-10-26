@@ -100,6 +100,8 @@ def main(argv=None):
     if not 1<=args.timeout<=3600:parser().error('timeout must be 1..3600 seconds')
     if args.operation=='hold-read' and not 1<=args.seconds<=3600:parser().error('seconds must be 1..3600')
     if args._report:return worker(args)
+    if args.operation=='encode' and os.environ.get('QTTS_TRAINING_SUPERVISED')=='1':
+        arm_parent_death(os.getppid())
     env=dict(os.environ)
     for key in ('QTTS_GPU_LEASE_FD','QTTS_GPU_LEASE_NONCE','QTTS_ACCESS_TOKEN','DEEPSEEK_API_KEY','HF_TOKEN','HUGGING_FACE_HUB_TOKEN','KAGGLE_USERNAME','KAGGLE_KEY'):env.pop(key,None)
     env.update({'HF_HUB_OFFLINE':'1','TRANSFORMERS_OFFLINE':'1','CUDA_VISIBLE_DEVICES':'','OMP_NUM_THREADS':'2','MKL_NUM_THREADS':'2','OPENBLAS_NUM_THREADS':'2'})

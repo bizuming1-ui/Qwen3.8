@@ -435,6 +435,16 @@ registerProcessor('qtts-ring', QttsRing);
   let accessToken = "",
     accessEpoch = 0,
     accessController = new AbortController();
+  function reloadAutomaticEntry() {
+    try {
+      if (sessionStorage.getItem("qtts-auto-entry-retry") === "1") return false;
+      sessionStorage.setItem("qtts-auto-entry-retry", "1");
+    } catch { /* storage may be disabled; still make one navigation attempt */ }
+    try {
+      location.reload();
+      return true;
+    } catch { return false; }
+  }
   function lockAccess(message = "已锁定；播放和请求已停止，私密内容已清空") {
     const returnToLogin =
       r("library-dialog").open ||
@@ -458,6 +468,15 @@ registerProcessor('qtts-ring', QttsRing);
     r("diagnostic-action-status").textContent="会话已退出；不会继续旧导出或回填旧短测。";
     r("btn-diagnostic-pair").disabled=false;
     microphone.cancel();
+    clearTimeout(simpleTrainingTimer);
+    simpleTrainingJob = "";
+    simpleTrainingFailures = 0;
+    r("full-ref-text").value = "";
+    r("simple-training-receipt").textContent = "";
+    r("simple-training-status").textContent = "已退出；训练任务状态已从此页面清除。";
+    r("simple-training-bar").style.width = "0";
+    r("btn-start-training").disabled = false;
+    r("btn-retry-activation").hidden = true;
     clearRecordingDownloads();
     r("rec-download-status").textContent = "退出后已清理本地下载链接。";
     _.length = 0;
@@ -496,7 +515,7 @@ registerProcessor('qtts-ring', QttsRing);
     r("access-status").textContent = message;
     r("conn").textContent = "已锁定";
     r("conn").className = "pill";
-    if (returnToLogin) r("access-token").focus({ preventScroll: true });
+    if (returnToLogin && !document.body.classList.contains("automatic-entry")) r("access-token").focus({ preventScroll: true });
   }
   async function apiFetch(path, options = {}) {
     const url = new URL(path, location.href);
@@ -521,7 +540,11 @@ registerProcessor('qtts-ring', QttsRing);
       await response.body?.cancel();
       throw new DOMException("stale access session", "AbortError");
     }
-    if (response.status === 401) lockAccess("会话已结束，请从 Notebook 打开新的私有入口");
+    if (response.status === 401) {
+      const automatic = accessToken === "@private-cookie";
+      lockAccess("会话已结束，正在自动获取新的私密入口…");
+      if (automatic) reloadAutomaticEntry();
+    }
     return response;
   }
   async function m(path, options) {
@@ -566,6 +589,8 @@ registerProcessor('qtts-ring', QttsRing);
       r("access-status").textContent = "口令应为32至256位非空格ASCII字符";
       return;
     }
+    try { sessionStorage.removeItem("qtts-auto-entry"); } catch {}
+    document.body.classList.remove("automatic-entry");
     lockAccess("正在验证访问口令…");
     accessToken = token;
     const epoch = accessEpoch;
@@ -582,6 +607,7 @@ registerProcessor('qtts-ring', QttsRing);
     r("protected-controls").hidden = false;
     r("access-status").textContent = "已解锁 · 本页内存凭据，刷新需重输";
     await v();
+    await resumeSimpleTraining();
   }
 
   async function automaticEntry() {
@@ -594,6 +620,9 @@ registerProcessor('qtts-ring', QttsRing);
       r("access-status").textContent = "私有入口格式无效，请从 Notebook 获取新入口";
       return;
     }
+    let automaticHint = Boolean(grant);
+    try { automaticHint = automaticHint || sessionStorage.getItem("qtts-auto-entry") === "1"; } catch {}
+    if (automaticHint) document.body.classList.add("automatic-entry");
     r("access-status").textContent = "正在自动连接私有控制台…";
     try {
       if (grant) {
@@ -611,6 +640,11 @@ registerProcessor('qtts-ring', QttsRing);
       if (!response.ok) throw new Error("请从 Notebook 打开私有入口，无需输入口令");
       if (epoch !== accessEpoch) return;
       accessToken = "@private-cookie";
+      document.body.classList.add("automatic-entry");
+      try {
+        sessionStorage.setItem("qtts-auto-entry", "1");
+        sessionStorage.removeItem("qtts-auto-entry-retry");
+      } catch {}
       if (!(await O())) throw new Error("网关暂不可用，请稍后从 Notebook 重新打开");
       if (epoch !== accessEpoch) return;
       document.body.classList.add("is-unlocked");
@@ -620,20 +654,29 @@ registerProcessor('qtts-ring', QttsRing);
       r("protected-controls").hidden = false;
       r("access-status").textContent = "已自动连接 · 私有会话 · 无需手动解锁";
       await v();
+      await resumeSimpleTraining();
     } catch (error) {
-      if (epoch === accessEpoch) lockAccess(error.name === "AbortError" ? "连接已停止" : "自动连接未完成；请从 Notebook 获取新入口，不要重启模型");
+      if (epoch !== accessEpoch) return;
+      if (error.name !== "AbortError" && reloadAutomaticEntry()) {
+        r("access-status").textContent = "正在重新获取自动私密入口，无需输入口令…";
+        return;
+      }
+      lockAccess(error.name === "AbortError" ? "连接已停止" : "自动连接未完成；请刷新页面获取新入口，不要重启模型");
     }
   }
   function endPrivateSession() {
-    // Clear local audio/private state immediately, then revoke the HttpOnly session.
-    lockAccess("已停止并退出；重新使用请从 Notebook 打开新入口");
+    // In the simulator, revoking a session must not strand the user at a password form.
+    const automatic = accessToken === "@private-cookie";
+    lockAccess(automatic ? "正在重新自动连接，无需输入口令…" : "已停止并退出；重新使用请从 Notebook 打开新入口");
     return fetch("/api/session/logout", {
       method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
       referrerPolicy: "no-referrer", keepalive: true,
     }).then(response => {
-      if (!response.ok) r("access-status").textContent = "本页已停止；服务端退出未确认，请清除此站点Cookie或稍后重试退出";
+      if (!response.ok && !automatic) r("access-status").textContent = "本页已停止；服务端退出未确认，请清除此站点Cookie或稍后重试退出";
     }).catch(() => {
-      r("access-status").textContent = "本页已停止；服务端退出未确认，请清除此站点Cookie或稍后重试退出";
+      if (!automatic) r("access-status").textContent = "本页已停止；服务端退出未确认，请清除此站点Cookie或稍后重试退出";
+    }).finally(() => {
+      if (automatic) location.reload();
     });
   }
 
@@ -1101,21 +1144,23 @@ registerProcessor('qtts-ring', QttsRing);
         ),
       ));
     if (t.trained_adapter) s.append(o("p",{class:"muted"},"训练候选 · 官方原生后端 · 句级缓冲（非声学流式） · 音质/重载未验收；固定训练参考，节奏参数为默认值。"));
+    const fullTranscript = o("textarea", {
+      rows: "5", class: "full-reftext", readonly: "readonly",
+      "aria-label": "完整参考转写 · " + t.name,
+    });
+    fullTranscript.value = t.full_ref_text || t.ref_text || "";
+    s.append(o("label", {}, "完整参考文本（整段自动转写；不是分段输入）"), fullTranscript);
     let i = o("textarea", {
       rows: "3",
       class: "reftext",
-      "aria-label": "参考文本 · " + t.name,
+      "aria-label": "内部锚点文本 · " + t.name,
     });
     if (t.trained_adapter) i.readOnly=true;
-    ((i.value = t.ref_text),
-      s.append(
-        o(
-          "label",
-          {},
-          "\u53C2\u8003\u6587\u672C(\u5FC5\u987B\u4E0E\u951A\u70B9\u97F3\u9891\u9010\u5B57\u4E00\u81F4,\u8FD9\u662F\u514B\u9686\u8D28\u91CF\u7684\u5173\u952E)",
-        ),
-        i,
-      ));
+    i.value = t.ref_text || "";
+    const anchorOptions = o("details", {class: "anchor-options"},
+      o("summary", {}, "高级：内部锚点文本（保持原克隆绑定，不是全文）"));
+    anchorOptions.append(o("label", {}, "锚点参考文本（必须与锚点音频逐字一致）"), i);
+    s.append(anchorOptions);
     let n = o("pre", { class: "out" }),
       d = (c, u) => {
         let g = o("button", { class: "sm" }, c);
@@ -1185,13 +1230,9 @@ registerProcessor('qtts-ring', QttsRing);
       t.candidates?.length)
     ) {
       let c = o(
-        "div",
+        "details",
         { class: "cands" },
-        o(
-          "label",
-          {},
-          "\u5019\u9009\u951A\u70B9(\u6309\u7EFC\u5408\u5206\u6392\u5E8F,\u53EF\u5207\u6362)",
-        ),
+        o("summary", {}, "高级：候选锚点（内部分段，不是完整转写）"),
       );
       (t.candidates.forEach((u, g) => {
         let f = o(
@@ -1878,8 +1919,170 @@ registerProcessor('qtts-ring', QttsRing);
     }));
   }
 
+  let simpleTrainingTimer = 0, simpleTrainingJob = "", simpleTrainingFailures = 0;
+  function simpleTrainingFiles() { return [...(r("files").files || []), ..._]; }
+  function renderSimpleTraining(job) {
+    if (!job) return;
+    if (typeof job.full_ref_text === "string" && job.full_ref_text)
+      r("full-ref-text").value = job.full_ref_text;
+    r("simple-training-bar").style.width = Math.max(0, Math.min(100, Number(job.pct) || 0)) + "%";
+    const stage = job.stage || "等待任务回执";
+    r("simple-training-status").textContent = `${Number(job.pct) || 0}% ${stage}\n${(job.log || []).slice(-4).join("\n")}${job.error ? "\n错误: " + job.error : ""}`;
+    const receipt = {...job};
+    delete receipt.full_ref_text;
+    delete receipt.log;
+    delete receipt.analyst_progress;
+    r("simple-training-receipt").textContent = JSON.stringify(receipt, null, 2);
+    r("btn-retry-activation").hidden = !(job.state === "error" && job.profile);
+  }
+  async function pollSimpleTraining(id, epoch) {
+    if (!accessToken || epoch !== accessEpoch) return;
+    try {
+      const job = await m("/api/training/jobs/" + id, {cache: "no-store"});
+      if (epoch !== accessEpoch) return;
+      simpleTrainingJob = id;
+      simpleTrainingFailures = 0;
+      renderSimpleTraining(job);
+      if (job.state === "running") {
+        r("btn-start-training").disabled = true;
+        simpleTrainingTimer = setTimeout(() => pollSimpleTraining(id, epoch), 1500);
+        return;
+      }
+      r("btn-start-training").disabled = false;
+      if (job.state === "done") {
+        r("simple-training-status").textContent += "\n真实训练与双worker加载回执已完成；请试听，音色/音质仍需独立验收。";
+        const submitted = new Set(simpleTrainingFiles());
+        _ = _.filter(file => !submitted.has(file));
+        if ([...(r("files").files || [])].every(file => submitted.has(file))) r("files").value = "";
+        renderRecordings();
+        await v();
+      }
+    } catch (error) {
+      if (epoch !== accessEpoch) return;
+      simpleTrainingFailures++;
+      r("simple-training-status").textContent = "训练进度读取未确认：" + error.message + "；不会据此宣称失败或成功，将继续读取。";
+      if (simpleTrainingFailures < 40 && simpleTrainingJob) {
+        simpleTrainingTimer = setTimeout(() => pollSimpleTraining(id, epoch), 3000);
+      } else {
+        r("btn-start-training").disabled = false;
+        r("simple-training-status").textContent += "\n请在Kaggle输出和任务回执中核对，不要盲目重复提交。";
+      }
+    }
+  }
+  async function startSimpleTraining() {
+    if (!accessToken) return;
+    if (microphone.state !== "idle") {
+      r("simple-training-status").textContent = "请先停止录音，再开始训练。";
+      return;
+    }
+    const files = simpleTrainingFiles();
+    if (!files.length) {
+      r("simple-training-status").textContent = "请先录制或上传参考语音。";
+      return;
+    }
+    const epoch = accessEpoch;
+    const name = r("pname").value.trim() || "我的声音";
+    if (Array.from(name).length > 64) {
+      r("simple-training-status").textContent = "声音名称请保持在64字符以内，或留空自动命名。";
+      return;
+    }
+    const form = new FormData();
+    form.append("name", name);
+    form.append("language", r("plang").value);
+    // The explicit Start action is the required rights/single-speaker acknowledgement.
+    form.append("voice_rights_confirmed", "1");
+    form.append("single_speaker_confirmed", "1");
+    for (const file of files) form.append("files", file, file.name);
+    clearTimeout(simpleTrainingTimer);
+    simpleTrainingFailures = 0;
+    r("btn-start-training").disabled = true;
+    r("btn-retry-activation").hidden = true;
+    r("simple-training-status").textContent = "正在上传并创建真实训练任务…";
+    r("simple-training-receipt").textContent = "任务尚未受理；没有训练成功回执。";
+    try {
+      const result = await m("/api/training/jobs", {method: "POST", body: form});
+      if (epoch !== accessEpoch) return;
+      simpleTrainingJob = result.job;
+      await pollSimpleTraining(simpleTrainingJob, epoch);
+    } catch (error) {
+      if (epoch !== accessEpoch) return;
+      r("btn-start-training").disabled = false;
+      r("simple-training-status").textContent = "训练任务未能受理：" + error.message + "；录音与旧档案保留。";
+    }
+  }
+  async function retrySimpleActivation() {
+    if (!simpleTrainingJob || !accessToken) return;
+    const epoch = accessEpoch;
+    r("btn-retry-activation").disabled = true;
+    try {
+      await m(`/api/training/jobs/${simpleTrainingJob}/retry-activation`, {method: "POST"});
+      r("btn-start-training").disabled = true;
+      await pollSimpleTraining(simpleTrainingJob, epoch);
+    } catch (error) {
+      if (epoch === accessEpoch) r("simple-training-status").textContent = "重试加载未受理：" + error.message;
+    } finally {
+      if (epoch === accessEpoch) r("btn-retry-activation").disabled = false;
+    }
+  }
+  async function readTrainingPreflight() {
+    if (!accessToken) return;
+    r("simple-training-receipt").textContent = "正在读取训练环境；这不是训练执行。";
+    try {
+      const report = await m("/api/training/preflight", {cache: "no-store"});
+      r("simple-training-receipt").textContent = JSON.stringify(report, null, 2);
+      r("simple-training-status").textContent = report.mode === "mock"
+        ? "当前是浏览器MOCK：可验证录音、转写和协议，但不会执行真实训练。"
+        : "训练预检已读取；开始任务时还会重新校验模型指纹、依赖与双T4。";
+    } catch (error) {
+      r("simple-training-receipt").textContent = "预检失败：" + error.message;
+    }
+  }
+  async function copyCompleteKaggle() {
+    const source = window.QTTS_KAGGLE_SOURCE;
+    if (typeof source !== "string" || source.length < 1000) {
+      r("simple-training-status").textContent = "完整Kaggle源码尚未加载；请刷新页面后再复制。";
+      return;
+    }
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(source);
+      else {
+        const area = o("textarea", {readonly: "readonly"});
+        area.value = source; area.style.position = "fixed"; area.style.opacity = "0";
+        document.body.append(area); area.select();
+        const copied = document.execCommand("copy"); area.remove();
+        if (!copied) throw new Error("browser copy command rejected");
+      }
+      r("simple-training-status").textContent = `已复制完整Kaggle启动代码（${source.length}字符）。粘贴到一个Python单元格并运行；真实训练需双T4。`;
+    } catch (error) {
+      r("simple-training-status").textContent = "浏览器未允许自动复制：" + error.message + "；请允许剪贴板权限后重试。";
+    }
+  }
+  async function resumeSimpleTraining() {
+    if (!accessToken) return;
+    const epoch = accessEpoch;
+    try {
+      const result = await m("/api/training/jobs", {cache: "no-store"});
+      if (epoch !== accessEpoch) return;
+      const job = (result.jobs || []).find(row => row.state === "running") || (result.jobs || [])[0];
+      if (!job) return;
+      simpleTrainingJob = job.id;
+      renderSimpleTraining(job);
+      if (job.state === "running") {
+        r("btn-start-training").disabled = true;
+        clearTimeout(simpleTrainingTimer);
+        simpleTrainingTimer = setTimeout(() => pollSimpleTraining(job.id, epoch), 500);
+      }
+    } catch { /* an older runtime simply has no training-service route */ }
+  }
+  function initializeSimpleTraining() {
+    r("btn-start-training").addEventListener("click", startSimpleTraining);
+    r("btn-retry-activation").addEventListener("click", retrySimpleActivation);
+    r("btn-training-preflight").addEventListener("click", readTrainingPreflight);
+    r("btn-copy-kaggle").addEventListener("click", copyCompleteKaggle);
+  }
+
   async function rt() {
-    initializeLibraries();initializeTrainingData();
+    initializeLibraries();initializeTrainingData();initializeSimpleTraining();
     try {
       for (const key of ["qtts_dskey", "qtts_base", "qtts_access_token"])
         localStorage.removeItem(key);

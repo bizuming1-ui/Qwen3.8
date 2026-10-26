@@ -59,7 +59,7 @@ func diagnosticClean(value any, key string, depth int) any {
         case "source_build_id":
             if len(v)==64 && diagnosticID.MatchString(v) { return v }
         case "engine":
-			if v == "mock" || v == "faster-qwen3-tts" || v == "qwen-adapter-buffered" {
+			if v == "mock" || v == "faster-qwen3-tts" || v == "qwen-adapter-buffered" || v == "hybrid" {
 				return v
 			}
 		case "dtype":
@@ -83,7 +83,7 @@ func diagnosticClean(value any, key string, depth int) any {
 				return v
 			}
 		case "model_output_mode":
-			if v == "sentence-buffered" {
+			if v == "sentence-buffered" || v == "acoustic-streaming" || v == "profile-dependent" {
 				return v
 			}
 		}

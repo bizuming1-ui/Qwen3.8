@@ -58,8 +58,8 @@ class JointLoss(nn.Module):
         return outputs.loss.float()+0.3*sub_loss.float()
 
 
-def epoch_indices(count,epoch,seed=42,world_size=2):
-    if count<world_size:raise ValueError('at least one distinct sample per rank required')
+def epoch_indices(count,epoch,seed=42,world_size=2,allow_single=False):
+    if count<1 or (count<world_size and not allow_single):raise ValueError('at least one distinct sample per rank required (or explicit single-sample mode)')
     indices=list(range(count));random.Random(seed+epoch).shuffle(indices)
     padding=(-count)%world_size;indices+=indices[:padding]
     return [indices[r::world_size] for r in range(world_size)]
@@ -186,7 +186,7 @@ def run_rank(request,rank,directory,rows):
                 progress_last[0]=now
                 print(json.dumps(dict(row,rank=rank,epoch=epoch,elapsed_s=now-progress_started)),flush=True)
         for epoch in range(request['epochs']):
-            indices=epoch_indices(len(rows),epoch,request['seed'])[rank]
+            indices=epoch_indices(len(rows),epoch,request['seed'],allow_single=request.get('allow_single_sample',False))[rank]
             stats=optimize_epoch(model,dataset,indices,optimizer,scaler,device,request['accumulation'],progress=diagnostic_progress)
             stats.update(epoch=epoch,seen_ids=[Path(rows[i]['audio']).stem for i in indices]);reports.append(stats)
             print(json.dumps({'rank':rank,'epoch':epoch,'loss_mean':stats['loss_mean'],'optimizer_steps':stats['optimizer_steps'],'overflow_steps':stats['overflow_steps']}),flush=True)

@@ -97,7 +97,7 @@ def compare(owner, values):
             raise UploadRejected("profile changed during paired test; no valid comparison",409)
         da,db=safe_observe(a),safe_observe(b)
         same_binding=sa.get("voice_binding")==binding and sb.get("voice_binding")==binding
-        same_engine=sa.get("engine") in ("faster-qwen3-tts","qwen-adapter-buffered") and sa.get("engine")==sb.get("engine")
+        same_engine=sa.get("engine") in ("faster-qwen3-tts","qwen-adapter-buffered","hybrid") and sa.get("engine")==sb.get("engine")
         same_dtype=sa.get("dtype") in ("fp16","bf16","fp32") and sa.get("dtype")==sb.get("dtype")
         distinct=type(sa.get("gpu")) is int and type(sb.get("gpu")) is int and sa.get("gpu")==0 and sb.get("gpu")==1
         result={"id":identifier,"kind":"pair_test","status":"done", "elapsed_s":time.monotonic()-started,

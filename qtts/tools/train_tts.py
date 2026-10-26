@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -19,6 +20,8 @@ def parser():
     train=sub.add_parser('train')
     for name in ('state','id','manifest-sha256','model-dir','model-sha256'):train.add_argument('--'+name,required=True)
     train.add_argument('--confirm-data-reviewed',action='store_true');train.add_argument('--ack-experimental-training',action='store_true')
+    train.add_argument('--allow-single-sample',action='store_true',help='explicit simple-flow admission for one aligned sample; DDP still uses two real ranks')
+    train.add_argument('--run-id',help='optional preallocated 32-hex run id for progress recovery')
     for name,default in [('epochs',1),('accumulation',4),('max-sequence',1024),('lora-rank',8),('seed',42),('timeout',1800)]:train.add_argument('--'+name,type=int,default=default)
     train.add_argument('--lr',type=float,default=2e-5);train.add_argument('--lora-alpha',type=float,default=16.)
     return p
@@ -27,6 +30,9 @@ def parser():
 def main(argv=None):
     args=parser().parse_args(argv)
     try:
+        if args.operation=='train' and os.environ.get('QTTS_TRAINING_SUPERVISED')=='1':
+            from encode_training import arm_parent_death
+            arm_parent_death(os.getppid())
         from training_job import base_fingerprint,run_controller,rank_worker
         if args._request:
             rank_worker(args._request,args._rank,args._parent_pid);return 0

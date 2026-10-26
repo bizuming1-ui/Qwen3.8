@@ -112,17 +112,22 @@ def pair_pin(a, b, binding, mock):
             return False
         if row.get('voice_binding') != binding or row.get('failed') or row.get('cancelled'):
             return False
-        if type(row.get('engine')) is not str or row['engine'] not in ('faster-qwen3-tts', 'qwen-adapter-buffered'):
+        if type(row.get('engine')) is not str or row['engine'] not in ('faster-qwen3-tts', 'qwen-adapter-buffered', 'hybrid'):
             return False
         if row.get('dtype') not in ('fp16', 'bf16', 'fp32'):
             return False
-        mode = 'trained-speaker-vector' if row['engine'] == 'qwen-adapter-buffered' else 'speaker-vector-only'
-        if row.get('voice_conditioning') != mode:
-            return False
+        if row['engine'] == 'hybrid':
+            mode = row.get('voice_conditioning')
+            if mode not in ('trained-speaker-vector', 'speaker-vector-only'):
+                return False
+        else:
+            mode = 'trained-speaker-vector' if row['engine'] == 'qwen-adapter-buffered' else 'speaker-vector-only'
+            if row.get('voice_conditioning') != mode:
+                return False
         policy = row.get('quality_policy')
         if policy not in ('legacy-stream', 'sentence-linear', 'sentence-agc', 'sentence-agc-headroom', 'windowed-linear'):
             return False
-        codec = 'adapter-native' if row['engine'] == 'qwen-adapter-buffered' else 'sentence' if policy in ('sentence-linear', 'sentence-agc', 'sentence-agc-headroom') else 'windowed'
+        codec = 'adapter-native' if mode == 'trained-speaker-vector' else 'sentence' if policy in ('sentence-linear', 'sentence-agc', 'sentence-agc-headroom') else 'windowed'
         if row.get('codec_policy') != codec:
             return False
         level = row.get('output_target_dbfs')

@@ -53,8 +53,8 @@ def clean(value, key="", depth=0):
         if key in {"id", "session", "voice_binding"} and re.fullmatch(r"[0-9a-f]{12,64}", value):
             return value
         if key in {"engine","dtype","rt","voice_conditioning","model_output_mode","quality_policy","codec_policy"} and value in {
-            "mock","faster-qwen3-tts","qwen-adapter-buffered","fp16","bf16","fp32","numpy-causal-v1",
-            "sentence-linear","sentence-agc","sentence-agc-headroom","windowed-linear","legacy-stream","windowed","sentence","adapter-native","numpy-sentence-linear-v1","trained-speaker-vector","speaker-vector-only","icl-generated-only-codec","sentence-buffered"}:
+            "mock","faster-qwen3-tts","qwen-adapter-buffered","hybrid","fp16","bf16","fp32","numpy-causal-v1",
+            "sentence-linear","sentence-agc","sentence-agc-headroom","windowed-linear","legacy-stream","windowed","sentence","adapter-native","numpy-sentence-linear-v1","trained-speaker-vector","speaker-vector-only","icl-generated-only-codec","sentence-buffered","acoustic-streaming","profile-dependent"}:
             return value
         return None
     if isinstance(value, dict):

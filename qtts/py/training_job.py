@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import stat
@@ -70,11 +71,12 @@ def base_fingerprint(directory):
     return hashlib.sha256(json.dumps(sorted(records,key=lambda x:x['path']),sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
 
-def admit(meta,rows,reviewed,experimental):
+def admit(meta,rows,reviewed,experimental,allow_single=False):
     if not reviewed or not experimental:raise UploadRejected('explicit data review and experimental training acknowledgement required',400)
     if meta['schema']!=2 or meta['state']!='audio_codes_prepared' or meta['engine']['kind']!='qwen3_tts_tokenizer_12hz' or meta['checks']['tokenization_executed'] is not True:
         raise UploadRejected('training rejects fixture codes and legacy/unsealed sources',409)
-    if len(rows)<2:raise UploadRejected('two distinct samples required for two-rank training',400)
+    if len(rows)<(1 if allow_single else 2):
+        raise UploadRejected('two distinct samples required for two-rank training (or explicit single-sample simple mode)',400)
 
 
 def validate_options(args):
@@ -154,7 +156,7 @@ def run_controller(args,tool):
     validate_options(args)
     codes=TrainingCodesStore.configured(args.state,UploadLimits.from_env())
     with codes.lease_with_fd(args.id,args.manifest_sha256) as (directory,meta,rows,code_fd):
-        admit(meta,rows,args.confirm_data_reviewed,args.ack_experimental_training)
+        admit(meta,rows,args.confirm_data_reviewed,args.ack_experimental_training,getattr(args,'allow_single_sample',False))
         model_dir=Path(args.model_dir).absolute()
         if base_fingerprint(model_dir)!=args.model_sha256:raise UploadRejected('Base model hash changed',409)
         if model_fingerprint(model_dir/'speech_tokenizer')!=meta['engine']['model_tree_sha256']:
@@ -165,12 +167,18 @@ def run_controller(args,tool):
             runs=Path(args.state).absolute()/'training_runs'
             codes.fs._directory(runs,create=True)
             if len(list(runs.iterdir()))>=32 or shutil.disk_usage(runs).free<512<<20:raise UploadRejected('training run storage budget reached',413)
-            run=runs/uuid.uuid4().hex;run.mkdir(mode=0o700)
+            requested_run_id=getattr(args,'run_id',None)
+            if requested_run_id is not None and (not isinstance(requested_run_id,str) or not re.fullmatch(r'[0-9a-f]{32}',requested_run_id)):
+                raise UploadRejected('invalid requested training run id',400)
+            run=runs/(requested_run_id or uuid.uuid4().hex)
+            if run.exists():raise UploadRejected('training run id already exists; retry with a new id',409)
+            run.mkdir(mode=0o700)
             request={'codes_id':args.id,'codes_sha256':args.manifest_sha256,'model_dir':str(model_dir),'model_sha256':args.model_sha256,
                      'state':str(Path(args.state).absolute()),'run_dir':str(run),'sample_ids':[s['id'] for s in meta['samples']],
                      'rendezvous':(run/'rendezvous').as_uri(),'epochs':args.epochs,'lr':args.lr,'lora_rank':args.lora_rank,
                      'lora_alpha':args.lora_alpha,'accumulation':args.accumulation,'seed':args.seed,'max_sequence':args.max_sequence,
-                     'confirm_data_reviewed':True,'ack_experimental_training':True}
+                     'confirm_data_reviewed':True,'ack_experimental_training':True,
+                     'allow_single_sample':bool(getattr(args,'allow_single_sample',False))}
             write_json(run/'request.json',request)
             processes=[];outcome='failed';started=time.monotonic();handlers={}
             try:
@@ -221,7 +229,7 @@ def rank_worker(request_path,rank,parent_pid):
     gpu_fd=int(os.environ[FD_ENV]);code_fd=int(os.environ[CODE_FD])
     with GpuLease.adopt(gpu_fd,os.environ[NONCE_ENV],expected_kind='offline-reservation'):
         with codes.adopt_lease(request['codes_id'],request['codes_sha256'],code_fd) as (directory,meta,rows):
-            admit(meta,rows,request['confirm_data_reviewed'],request['ack_experimental_training'])
+            admit(meta,rows,request['confirm_data_reviewed'],request['ack_experimental_training'],request.get('allow_single_sample',False))
             for fd in {gpu_fd,code_fd}:os.close(fd)
             from tts_training import run_rank
             run_rank(request,rank,directory,rows)

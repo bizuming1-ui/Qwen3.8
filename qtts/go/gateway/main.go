@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ type Config struct {
 	Port         int
 	WorkerURLs   []string
 	AnalystURL   string
+	TrainingURL  string
 	WebDir       string
 	StateDir     string
 	LLMKey       string
@@ -34,6 +36,7 @@ type Config struct {
 	LLMModel     string
 	LLMMaxTokens int
 	AccessToken  string
+	AutoOpen     bool
 }
 
 func env(k, d string) string {
@@ -52,6 +55,7 @@ func loadConfig() *Config {
 		LLMBase:     env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
 		LLMModel:    env("DEEPSEEK_MODEL", "deepseek-chat"),
 		AccessToken: os.Getenv("QTTS_ACCESS_TOKEN"),
+		AutoOpen:    os.Getenv("QTTS_AUTO_OPEN") == "1",
 	}
 	c.LLMMaxTokens, _ = strconv.Atoi(env("DEEPSEEK_MAX_TOKENS", "8192"))
 	if c.LLMMaxTokens < 1 || c.LLMMaxTokens > 65536 {
@@ -64,6 +68,7 @@ func loadConfig() *Config {
 		}
 	}
 	c.AnalystURL = "http://127.0.0.1:" + env("QTTS_ANALYST_PORT", "7010")
+	c.TrainingURL = "http://127.0.0.1:" + env("QTTS_TRAINING_PORT", "7020")
 	return c
 }
 
@@ -388,6 +393,33 @@ func (a *App) proxy() http.Handler {
 	return rp
 }
 
+func (a *App) trainingProxy() http.Handler {
+	u, _ := url.Parse(a.cfg.TrainingURL)
+	rp := httputil.NewSingleHostReverseProxy(u)
+	rp.FlushInterval = -1
+	orig := rp.Director
+	rp.Director = func(r *http.Request) {
+		orig(r)
+		for _, name := range []string{"Authorization", "Proxy-Authorization", "Cookie", "X-DeepSeek-Key"} {
+			r.Header.Del(name)
+		}
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/training")
+		if r.URL.Path == "" {
+			r.URL.Path = "/"
+		}
+		r.Host = u.Host
+	}
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, 413, map[string]string{"error": "upload exceeds configured request limit"})
+			return
+		}
+		writeJSON(w, 502, map[string]string{"error": "training service unavailable or request interrupted"})
+	}
+	return rp
+}
+
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -431,6 +463,43 @@ func (a *App) preflight(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, report)
 }
 
+// serveAutomaticIndex mirrors the Python preview's passwordless entry flow.
+// It issues only a bounded, one-use grant; the access token is never placed in HTML.
+func (a *App) serveAutomaticIndex(w http.ResponseWriter, r *http.Request) bool {
+	if !a.cfg.AutoOpen || a.guard == nil || a.guard.entry == nil || r.Method != http.MethodGet || (r.URL.Path != "/" && r.URL.Path != "/index.html") || a.guard.entry.validSession(r) {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(a.cfg.WebDir, "index.html"))
+	if err != nil {
+		return false
+	}
+	const marker = `<script src="app.js"></script>`
+	if !strings.Contains(string(raw), marker) {
+		return false
+	}
+	value, err := entrySecret()
+	if err != nil {
+		return false
+	}
+	a.guard.entry.mu.Lock()
+	now := time.Now()
+	a.guard.entry.prune(now)
+	if len(a.guard.entry.grants) >= 8 {
+		a.guard.entry.mu.Unlock()
+		return false
+	}
+	a.guard.entry.grants[sha256.Sum256([]byte(value))] = now.Add(grantTTL)
+	a.guard.entry.mu.Unlock()
+	bootstrap := `<script>window.location.hash="qtts-entry=` + value + `";</script>`
+	content := strings.Replace(string(raw), marker, bootstrap+marker, 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = io.WriteString(w, content)
+	return true
+}
+
 func (a *App) routes() http.Handler {
 	api := http.NewServeMux()
 	getOnly := func(fn http.HandlerFunc) http.HandlerFunc {
@@ -453,6 +522,7 @@ func (a *App) routes() http.Handler {
 	api.HandleFunc("/api/report", a.report)
 	api.HandleFunc("/api/profiles/activate", a.activate)
 	api.Handle("/api/prep/", a.proxy())
+	api.Handle("/api/training/", a.trainingProxy())
 	api.HandleFunc("/api/session/issue", a.guard.issueEntry)
 	api.HandleFunc("/api/session/status", a.guard.sessionStatus)
 	api.HandleFunc("/api/session/logout", a.guard.logoutEntry)
@@ -464,8 +534,11 @@ func (a *App) routes() http.Handler {
 	mux.Handle("/api", a.guard.middleware(api))
 	fs := http.FileServer(http.Dir(a.cfg.WebDir))
 	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" && r.URL.Path != "/recorder.js" && r.URL.Path != "/diagnostic-trace.js") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		if (r.URL.Path != "/" && r.URL.Path != "/index.html" && r.URL.Path != "/app.js" && r.URL.Path != "/recorder.js" && r.URL.Path != "/diagnostic-trace.js" && r.URL.Path != "/kaggle-source.js") || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 			http.NotFound(w, r)
+			return
+		}
+		if a.serveAutomaticIndex(w, r) {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache")

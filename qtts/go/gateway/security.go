@@ -142,6 +142,7 @@ func denyBusy(w http.ResponseWriter, message string) {
 }
 
 var librarySamplesUpload = regexp.MustCompile(`^/api/prep/libraries/[0-9a-f]{32}/samples$`)
+var simpleTrainingUpload = regexp.MustCompile(`^/api/training/jobs$`)
 
 func (g *Guard) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +165,7 @@ func (g *Guard) middleware(next http.Handler) http.Handler {
 			return
 		}
 		max := g.limits.JSONBytes
-		if r.URL.Path == "/api/prep/profiles" || r.URL.Path == "/api/prep/evaluate" || (r.Method == http.MethodPost && librarySamplesUpload.MatchString(r.URL.Path)) {
+		if r.URL.Path == "/api/prep/profiles" || r.URL.Path == "/api/prep/evaluate" || (r.Method == http.MethodPost && (librarySamplesUpload.MatchString(r.URL.Path) || simpleTrainingUpload.MatchString(r.URL.Path))) {
 			max = g.limits.UploadBytes
 		}
 		if r.ContentLength > max {
@@ -175,7 +176,7 @@ func (g *Guard) middleware(next http.Handler) http.Handler {
 		var slots chan struct{}
 		if r.URL.Path == "/api/speak" && r.Method == http.MethodPost {
 			slots = g.speakSlots
-		} else if r.Method != http.MethodGet && r.Method != http.MethodHead && (strings.HasPrefix(r.URL.Path, "/api/prep/") || r.URL.Path == "/api/profiles/activate") {
+		} else if r.Method != http.MethodGet && r.Method != http.MethodHead && (strings.HasPrefix(r.URL.Path, "/api/prep/") || strings.HasPrefix(r.URL.Path, "/api/training/") || r.URL.Path == "/api/profiles/activate") {
 			slots = g.heavySlots
 		}
 		if slots != nil {

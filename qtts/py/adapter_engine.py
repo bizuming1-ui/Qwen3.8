@@ -102,6 +102,19 @@ class AdapterEngine:
             raise RuntimeError('native trained backend returned invalid waveform')
         yield wave # Exactly one fully-generated sentence. Never fake acoustic chunks.
 
+    def _unload(self):
+        # Hybrid switching releases the native model before constructing Faster.
+        self.prompt = None
+        self.key = None
+        self.model = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def vram(self):
         import torch
         free,total=torch.cuda.mem_get_info()

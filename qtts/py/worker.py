@@ -77,12 +77,18 @@ def output_max_gain_db():
 
 
 def voice_conditioning(engine):
-    if getattr(engine, "supports_trained", False):
-        return "trained-speaker-vector"
     if engine.name == "mock":
         return "mock"
+    if getattr(engine, "supports_trained", False) and engine.name != "hybrid":
+        return "trained-speaker-vector"
     clone_mode()
     return "speaker-vector-only"
+
+
+def profile_conditioning(engine, profile):
+    if "trained_adapter" in profile and getattr(engine, "supports_trained", False):
+        return "trained-speaker-vector"
+    return voice_conditioning(engine)
 
 F_PCM, F_STATS, F_ERR = 1, 2, 3
 RESTART_EXIT_CODE = 75
@@ -331,19 +337,122 @@ class RealEngine:
                 "alloc_mb": round(torch.cuda.memory_allocated() / 2**20)}
 
 
+class HybridEngine:
+    """Lazy, explicit routing between legacy streaming and trained LoRA inference.
+
+    Only one model backend is resident on a T4 at a time.  A profile switch is a
+    deliberate model/prompt reload, never a silent fallback to a different voice.
+    """
+    name = "hybrid"
+    sample_rate = SAMPLE_RATE
+    supports_trained = True
+    profile_switch_requires_reload = True
+
+    def __init__(self, gpu):
+        self.gpu = gpu
+        self.active_kind = None
+        self.backend = None
+        self.active_profile = None
+
+    @property
+    def dtype_name(self):
+        return getattr(self.backend, "dtype_name", os.environ.get("QTTS_DTYPE", "fp16"))
+
+    @property
+    def model(self):
+        return getattr(self.backend, "model", None)
+
+    @property
+    def last_stream_metrics(self):
+        return getattr(self.backend, "last_stream_metrics", {})
+
+    @staticmethod
+    def kind(profile):
+        return "adapter" if "trained_adapter" in profile else "faster"
+
+    def load(self):
+        self._load_kind("faster")
+
+    def _load_kind(self, kind):
+        if self.active_kind == kind and self.backend is not None:
+            return
+        if self.backend is not None:
+            unload = getattr(self.backend, "_unload", None)
+            if callable(unload):
+                unload()
+            else:
+                self.backend.model = None
+                import gc
+                gc.collect()
+                try:
+                    import torch
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+        self.backend = None
+        self.active_profile = None
+        self.active_kind = None
+        if kind == "faster":
+            self.backend = RealEngine(self.gpu)
+        elif kind == "adapter":
+            from adapter_engine import AdapterEngine
+            from qtts_common import STATE
+            self.backend = AdapterEngine(self.gpu, STATE, MODEL_ID, os.environ.get("QTTS_BASE_SHA256", ""))
+        else:
+            raise ValueError("unknown hybrid backend")
+        try:
+            self.backend.load()
+        except BaseException:
+            self.backend = None
+            raise
+        self.active_kind = kind
+        log.info("hybrid backend loaded: %s", kind)
+
+    def needs_profile_reload(self, pid, profile):
+        return self.active_profile != (pid, self.kind(profile))
+
+    def load_profile(self, profile):
+        kind = self.kind(profile)
+        self._load_kind(kind)
+        info = self.backend.load_profile(profile)
+        self.active_profile = (profile["id"], kind)
+        info["backend"] = self.backend.name
+        return info
+
+    def stream(self, profile, *args):
+        kind = self.kind(profile)
+        if self.active_kind != kind or self.active_profile != (profile["id"], kind):
+            raise RuntimeError("hybrid profile/backend mismatch; explicit reload required")
+        return self.backend.stream(profile, *args)
+
+    def stream_quality(self, profile, *args):
+        if self.kind(profile) == "adapter":
+            return self.stream(profile, *args)
+        if self.active_kind != "faster" or self.active_profile != (profile["id"], "faster"):
+            raise RuntimeError("hybrid quality profile/backend mismatch; explicit reload required")
+        return self.backend.stream_quality(profile, *args)
+
+    def vram(self):
+        if self.backend is None:
+            return {"used_mb": 0, "total_mb": 0, "alloc_mb": 0}
+        return self.backend.vram()
+
+
 # --------------------------------------------------------------------------------------
 # Worker core
 # --------------------------------------------------------------------------------------
 class Worker:
     def __init__(self):
         kind=os.environ.get('QTTS_TTS_ENGINE','faster')
-        if kind not in ('faster','qwen-adapter-buffered'):raise RuntimeError('unknown QTTS_TTS_ENGINE; no fallback')
-        if kind=='qwen-adapter-buffered':
-            if MOCK:raise RuntimeError('trained adapter backend cannot run as Mock')
+        if kind not in ('faster','hybrid','qwen-adapter-buffered'):raise RuntimeError('unknown QTTS_TTS_ENGINE; no fallback')
+        if kind=='qwen-adapter-buffered' and MOCK:raise RuntimeError('trained adapter backend cannot run as Mock')
+        if MOCK:self.engine=MockEngine(ARGS.gpu)
+        elif kind=='hybrid':self.engine=HybridEngine(ARGS.gpu)
+        elif kind=='qwen-adapter-buffered':
             from adapter_engine import AdapterEngine
             from qtts_common import STATE
             self.engine=AdapterEngine(ARGS.gpu,STATE,MODEL_ID,os.environ.get('QTTS_BASE_SHA256',''))
-        else:self.engine=MockEngine(ARGS.gpu) if MOCK else RealEngine(ARGS.gpu)
+        else:self.engine=RealEngine(ARGS.gpu)
         self.ready = False
         self.error: str | None = None
         self.lock = threading.Lock()
@@ -384,7 +493,7 @@ class Worker:
         self.voice_bindings[pid] = binding
         self._reset_leveler(pid)
         self.breath_banks[pid] = []
-        info.update(breath_clips=0, output_target_dbfs=output_target_dbfs(), voice_binding=binding, voice_conditioning=voice_conditioning(self.engine))
+        info.update(breath_clips=0, output_target_dbfs=output_target_dbfs(), voice_binding=binding, voice_conditioning=profile_conditioning(self.engine, prof))
         return info
 
     def _reset_leveler(self, pid, *, peak_ceiling=.99, limiter_knee=.10):
@@ -419,7 +528,8 @@ class Worker:
         request_mode = body.get("request_mode")
         if type(request_mode) is str and request_mode in ("read", "chat"):
             stats.update(request_mode=request_mode, content_source=content_source(request_mode))
-        if getattr(self.engine,"supports_trained",False):stats.update(model_output_mode="sentence-buffered",quality_verified=False,inference_reload_verified=False)
+        if getattr(self.engine,"supports_trained",False) and self.engine.name != "hybrid":
+            stats.update(model_output_mode="sentence-buffered",quality_verified=False,inference_reload_verified=False)
         probe = JobProbe()
         monitor_id = diagnostic_uuid.uuid4().hex
         monitor_session = body.get("diagnostic_session", "")
@@ -464,15 +574,23 @@ class Worker:
                 raise FileNotFoundError(f"profile {pid} not found")
             guard_profile(prof, getattr(self.engine, "supports_trained", False))
             binding = reference_binding(profile_dir(pid), prof, allow_missing=MOCK)
-            if body.get("voice_conditioning") is not None and body["voice_conditioning"] != voice_conditioning(self.engine):
+            if body.get("voice_conditioning") is not None and body["voice_conditioning"] != profile_conditioning(self.engine, prof):
                 raise RuntimeError("worker conditioning mode differs from session; no mixed-mode fallback")
             requested = body.get("voice_binding")
             if requested is not None and (not isinstance(requested, str) or requested != binding):
                 raise RuntimeError("voice reference changed; start a new session (no mixed-voice fallback)")
-            if pid not in self.profiles or self.voice_bindings.get(pid, "") != binding or (hasattr(self.engine, "_prompts") and pid not in self.engine._prompts):
+            switch_check = getattr(self.engine, "needs_profile_reload", None)
+            needs_switch = callable(switch_check) and switch_check(pid, prof)
+            if pid not in self.profiles or self.voice_bindings.get(pid, "") != binding or needs_switch or (hasattr(self.engine, "_prompts") and pid not in self.engine._prompts):
                 self._load_profile_locked(pid, prof)
             # Use the loaded immutable dict, never a snapshot captured before lock.
             prof = self.profiles[pid]
+            if self.engine.name == "hybrid":
+                trained = "trained_adapter" in prof
+                stats["model_output_mode"] = "sentence-buffered" if trained else "acoustic-streaming"
+                stats["codec_policy"] = "adapter-native" if trained else ("sentence" if sentence_codec else "windowed")
+                stats["quality_verified"] = False
+                stats["inference_reload_verified"] = False
             stats["voice_binding"] = binding
             stats["profile_prepare_ms"] = round(now_ms()-profile_prepare_started,3)
             self.busy = True
@@ -550,7 +668,7 @@ class Worker:
                 emit(frame(F_PCM, pcm.tobytes()))
                 probe.feed(pcm, output=True)
             stream = self.engine.stream
-            if sentence_codec and self.engine.name != "mock" and not getattr(self.engine, "supports_trained", False):
+            if sentence_codec and self.engine.name != "mock" and (not getattr(self.engine, "supports_trained", False) or "trained_adapter" not in prof):
                 stream = self.engine.stream_quality
             for a in stream(prof, text, lang, chunk_size, max_new, seed, cancel):
                 if cancel.is_set():
@@ -601,7 +719,7 @@ class Worker:
                 "extra_breath_mode": "disabled-no-reference-playback",
                 "extra_breath_requested": bool(body.get("breath", False)),
                 "extra_breath_available": False,
-                "voice_conditioning": voice_conditioning(self.engine),
+                "voice_conditioning": profile_conditioning(self.engine, prof) if "prof" in locals() else voice_conditioning(self.engine),
                 "reference_pcm_splicing": False, "output_target_dbfs": output_target_dbfs(), "acoustic_text_verified": False, "gen_ms": round(gen_ms, 1), "audio_s": round(audio_s, 3), "speech_samples": speech_samples,
                 "rtf_x": round(audio_s / max(gen_ms / 1000, 1e-3), 3),
                 "rtf": round(gen_ms / 1000 / audio_s, 4) if audio_s > 0 else None, "chunks": chunks, "chunk_size": chunk_size,
@@ -729,7 +847,7 @@ async def health():
         "stalled_s": round(time.time() - W.last_progress, 1) if W.busy else 0.0,
     }
     if getattr(W.engine,"supports_trained",False):
-        d["model_output_mode"]="sentence-buffered"
+        d["model_output_mode"] = ("sentence-buffered" if W.engine.name != "hybrid" or getattr(W.engine, "active_kind", None) == "adapter" else "acoustic-streaming")
         d["quality_verified"]=False
     if W.ready and not MOCK:
         try:

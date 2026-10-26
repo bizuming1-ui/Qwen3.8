@@ -63,14 +63,17 @@ def qwen_configuration_check(report):
 
 
 def collect(runtime=False, expected_gpus=2, dtype="fp16"):
-    native=os.environ.get("QTTS_TTS_ENGINE","faster")=="qwen-adapter-buffered"
+    requested=os.environ.get("QTTS_TTS_ENGINE","faster")
+    native=requested=="qwen-adapter-buffered"
+    hybrid=requested=="hybrid"
     report={"schema":1,"mode":"runtime_surface" if runtime else "static",
             "status":"inspection_only","created_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
             "python":platform.python_version(),"checks":[],"devices":[],
             "model_loaded":False,"inference_verified":False,"training_verified":False,"performance_verified":False}
-    report["requested_engine"]=os.environ.get("QTTS_TTS_ENGINE","faster")
-    if report["requested_engine"] not in ("faster","qwen-adapter-buffered"):add(report,"engine","blocked","unknown explicit engine")
+    report["requested_engine"]=requested
+    if requested not in ("faster","hybrid","qwen-adapter-buffered"):add(report,"engine","blocked","unknown explicit engine")
     if native:report["model_output_mode"]="sentence-buffered"
+    elif hybrid:report["model_output_mode"]="profile-dependent"
     add(report,"python","pass" if sys.version_info >= (3,10) else "blocked","Python >=3.10 required")
     for package,required in [("torch",True),("faster-qwen3-tts",not native),("transformers",False),("qwen-tts",False),("qwen-tts-hf",False),
                              ("fastapi",True),("uvicorn",True),("soundfile",True),("faster-whisper",False)]:
@@ -81,7 +84,7 @@ def collect(runtime=False, expected_gpus=2, dtype="fp16"):
             add(report,"package."+package,"blocked" if required else "warning","not installed",required)
         except Exception as error:
             add(report,"package."+package,"blocked" if required else "warning",type(error).__name__+" (metadata error; message redacted)",required)
-    if native:
+    if native or hybrid:
         available=any(c["name"] in ("package.qwen-tts","package.qwen-tts-hf") and c["status"]=="pass" for c in report["checks"])
         add(report,"package.qwen-provider","pass" if available else "blocked","official or HF provider required; namespace/config compatibility checked at runtime")
     add(report,"tool.ffmpeg","pass" if shutil.which("ffmpeg") else "warning",
@@ -105,15 +108,17 @@ def collect(runtime=False, expected_gpus=2, dtype="fp16"):
         except Exception as error:
             add(report,"cuda_import","blocked",type(error).__name__+" (message redacted)")
         try:
-            if native:
+            if native or hybrid:
                 backend=importlib.import_module("qwen_tts");cls=getattr(backend,"Qwen3TTSModel",None)
                 qwen_configuration_check(report)
                 signature_check(report,cls,"from_pretrained",["device_map","dtype","attn_implementation","local_files_only","trust_remote_code","use_safetensors"])
                 signature_check(report,cls,"generate_voice_clone",["text","language","voice_clone_prompt","non_streaming_mode","max_new_tokens","temperature","top_k","top_p","repetition_penalty","stopping_criteria"])
-                add(report,"buffered_output","pass","sentence-buffered only; adapter/Qwen reload and cancellation behavior not tested",False)
-                return finalize(report)
+                add(report,"buffered_output","pass","native adapter surface; hybrid also checks Faster below; reload/cancellation not tested",False)
+                if native:
+                    return finalize(report)
             backend=importlib.import_module("faster_qwen3_tts")
-            qwen_configuration_check(report)
+            if not hybrid:
+                qwen_configuration_check(report)
             cls=getattr(backend,"FasterQwen3TTS",None)
             if cls is None:
                 add(report,"backend_class","blocked","FasterQwen3TTS is missing")

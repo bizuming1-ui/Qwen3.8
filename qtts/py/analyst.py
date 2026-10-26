@@ -35,6 +35,7 @@ from step18_calibration_state import exclusive_calibration, snapshot, confirm_sn
 from step18_calibration_metrics import (CalibrationResult, centroid_value, evaluate_trial,
     failed_trials, summarize, safe_workers, build_summary)
 from reference_segments import context_seconds, prepare_segments
+from simple_preparation import join_transcript, prepare_snapshot
 from voice_binding import reference_binding
 from qtts_common import (  # noqa: E402
     ANALYST_PORT, MOCK, PROFILES_DIR, SAMPLE_RATE, STATE, WORKER_PORTS, count_text_units, get_logger,
@@ -615,7 +616,7 @@ class BuildEmbeddingCache:
                 "scope": "this-profile-build-only", "entry_limit": 64}
 
 
-def build_profile(job: dict, name: str, files: list[tuple[str, bytes]], language: str, manual_text: str, calibrate: bool, anchor_seconds: int = 16):
+def build_profile(job: dict, name: str, files: list[tuple[str, bytes]], language: str, manual_text: str, calibrate: bool, anchor_seconds: int = 16, training_callback=None, load_workers: bool = True):
     anchor_seconds = context_seconds(anchor_seconds)
     t_start = time.time()
     monitor_id = uuid.uuid4().hex
@@ -728,6 +729,15 @@ def build_profile(job: dict, name: str, files: list[tuple[str, bytes]], language
         if not clips:
             raise ValueError("ASR found no speech. Provide cleaner audio or type the transcript manually.")
         ref_lang = ref_lang or "zh"
+        # Keep the model's short anchor transcript separate from the complete
+        # user-facing transcript.  Internal windows never replace this full text.
+        job["full_ref_text"] = join_transcript(clips)
+        job["transcript_source"] = "manual_aligned" if manual_text else "automatic_asr"
+        job["transcript_verified"] = False
+        if training_callback is not None:
+            # The callback publishes only an immutable input snapshot.  It does
+            # not encode, train, activate, or claim acoustic quality.
+            training_callback(cleaned, clips, ref_lang)
 
         stage_done("asr")
         # ---- 3. candidate anchors ----------------------------------------------------------
@@ -869,6 +879,9 @@ def build_profile(job: dict, name: str, files: list[tuple[str, bytes]], language
             "id": pid, "name": name, "language": LANG_NAME.get(ref_lang, "Auto"), "lang_code": ref_lang,
             "created": dt.datetime.now().isoformat(timespec="seconds"),
             "anchor": anchor_name, "anchor_candidate": 0, "ref_text": cand_meta[0]["text"],
+            "full_ref_text": job.get("full_ref_text", ""), "transcript_source": job.get("transcript_source", "automatic_asr"),
+            "transcript_verified": False,
+            "training_preparation": job.get("simple_training"),
             "candidates": cand_meta, "target_rms_dbfs": target_db, "reference_normalize_dbfs": TARGET_DBFS, "units_per_sec": round(ups, 3),
             "pause_clause_ms": pc, "pause_sentence_ms": ps, "pause_para_ms": int(ps * 1.65),
             "breath_files": breath_files, "breath_level_db": round(breath_db, 1),
@@ -878,8 +891,14 @@ def build_profile(job: dict, name: str, files: list[tuple[str, bytes]], language
                       "sentence_gaps": len(sent_gaps), "breaths_found": len(breaths)},
         }
         write_json_atomic(d / "profile.json", prof)
-        jlog(job, 82, "loading profile on both GPU workers (voice-clone prompt cache)")
-        loads = load_on_workers(pid)
+        if load_workers:
+            jlog(job, 82, "loading profile on both GPU workers (voice-clone prompt cache)")
+            loads = load_on_workers(pid)
+        else:
+            # Simple training does not load an intermediate, untrained profile.
+            # The final trained profile is loaded only after its adapter receipt.
+            jlog(job, 82, "reference and complete transcript prepared; intermediate profile not activated")
+            loads = []
         prof["worker_load"] = loads
         write_json_atomic(d / "profile.json", prof)
         stage_done("worker_load")
@@ -1125,6 +1144,60 @@ async def create_profile(request: Request):
         return _err("could not start voice build; retry later",503)
     finally:
         if not started:ADMISSION.slot.release()
+
+
+@app.post("/simple-training/prepare")
+async def simple_training_prepare(request: Request):
+    """Decode/ASR/reference preparation only; the training service owns execution."""
+    if not ADMISSION.slot.acquire(blocking=False):
+        return _err("another reference or training preparation is already running; retry after it finishes", 429)
+    started = False
+    try:
+        if shutil.disk_usage(PROFILES_DIR).free < 256 << 20:
+            return _err("insufficient free disk space for safe training preparation", 507)
+        async with request.form(max_files=LIMITS.files, max_fields=8) as form:
+            files = form.getlist("files")
+            if not files or not all(isinstance(f, FormUploadFile) for f in files):
+                return _err("upload at least one reference recording")
+            if len(files) > LIMITS.files:
+                return _err("too many uploaded audio files", 413)
+            name = _form_text(form, "name", "my-voice", 64).strip()
+            language = _form_text(form, "language", "auto", 32)
+            if not name:
+                return _err("voice name is empty")
+            if form.get("voice_rights_confirmed") != "1" or form.get("single_speaker_confirmed") != "1":
+                return _err("voice rights and single-speaker confirmation are required", 400)
+            blobs = []
+            total = 0
+            for file in files:
+                data = await read_upload(file, LIMITS, LIMITS.request_bytes - total)
+                total += len(data)
+                filename = Path((file.filename or "audio").replace("\\", "/")).name[:128]
+                blobs.append((filename or "audio", data))
+        job = {"id": uuid.uuid4().hex[:12], "state": "running", "pct": 0, "stage": "queued",
+               "log": [], "profile": None, "simple_training": None,
+               "operation": "simple_training_preparation_not_optimizer"}
+        def run_build():
+            with BUILD_LOCK:
+                def callback(cleaned, clips, ref_lang):
+                    job["simple_training"] = prepare_snapshot(
+                        LIBRARIES, TRAINING_DATA, name=name, language=language,
+                        cleaned=cleaned, clips=clips)
+                build_profile(job, name, blobs, language, "", False,
+                              training_callback=callback, load_workers=False)
+        ADMISSION.start(JOBS, job, LIMITS.jobs, run_build)
+        started = True
+        return {"job": job["id"], "operation": "simple_training_preparation_not_optimizer"}
+    except UploadRejected as error:
+        return _err(str(error), error.code)
+    except FormError as error:
+        return _err("multipart field/file limit exceeded or malformed form", 413 if "Too many" in str(error.detail) else 400)
+    except RuntimeError:
+        log.exception("simple training preparation could not be started")
+        return _err("could not start reference preparation; retry later", 503)
+    finally:
+        if not started:
+            ADMISSION.slot.release()
 
 
 @app.get("/jobs/{jid}")
